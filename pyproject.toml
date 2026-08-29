@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ipf-binary-baseline"
+version = "0.1.0"
+description = "Patient-level IPF versus non-IPF CT baseline"
+requires-python = ">=3.12"
+dependencies = [
+  "joblib>=1.4,<2",
+  "nibabel>=5.3,<6",
+  "numpy>=2.0,<3",
+  "open_clip_torch>=3,<4",
+  "openpyxl>=3.1,<4",
+  "pandas>=2.2,<4",
+  "pillow>=11,<13",
+  "protobuf>=5,<7",
+  "scikit-learn>=1.6,<2",
+  "sentencepiece>=0.2,<1",
+  "tqdm>=4.67,<5",
+  "transformers>=4.53,<6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

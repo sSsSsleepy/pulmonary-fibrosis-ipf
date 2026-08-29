@@ -1,0 +1,12 @@
+{
+  "positive": [
+    "axial lung CT showing a usual interstitial pneumonia pattern consistent with idiopathic pulmonary fibrosis",
+    "lung CT with basal subpleural reticulation, traction bronchiectasis and honeycombing from idiopathic pulmonary fibrosis",
+    "high resolution chest CT demonstrating idiopathic pulmonary fibrosis"
+  ],
+  "negative": [
+    "axial lung CT without a usual interstitial pneumonia pattern or idiopathic pulmonary fibrosis",
+    "lung CT showing non-IPF interstitial lung disease",
+    "high resolution chest CT not demonstrating idiopathic pulmonary fibrosis"
+  ]
+}

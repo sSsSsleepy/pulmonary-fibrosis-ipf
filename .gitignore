@@ -1,0 +1,50 @@
+.venv/
+.model_cache/
+artifacts/
+ILDclean/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tmp/
+
+# Patient-level and source clinical data must never be committed.
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.arrow
+*.sav
+
+# Medical images and associated volume formats.
+*.nii
+*.nii.gz
+*.dcm
+*.dicom
+*.nrrd
+*.mha
+*.mhd
+
+# Derived patient features, checkpoints, and fitted models.
+*.npz
+*.npy
+*.mat
+*.h5
+*.hdf5
+*.joblib
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Local packaging, credentials, and transient outputs.
+*.egg-info/
+.env
+.env.*
+*.pem
+*.key
+*.log
