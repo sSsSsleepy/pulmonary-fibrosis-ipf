@@ -24,6 +24,18 @@ class LungSegmentationTests(unittest.TestCase):
         self.assertEqual(qc["labels_present"], [1, 2])
         self.assertAlmostEqual(qc["largest_component_fraction"], 1.0)
 
+    def test_separated_left_and_right_lung_labels_are_not_fragmented(self) -> None:
+        mask = np.zeros((20, 80, 80), dtype=np.uint8)
+        mask[2:18, 10:35, 20:60] = 1
+        mask[2:18, 45:70, 20:60] = 2
+
+        qc = compute_mask_qc(mask, (3.0, 3.0, 3.0))
+
+        self.assertEqual(qc["status"], "passed")
+        self.assertNotIn("fragmented_mask", qc["reasons"])
+        self.assertEqual(qc["connected_components"], 2)
+        self.assertEqual(qc["per_label_largest_component_fraction"], {"1": 1.0, "2": 1.0})
+
     def test_validate_mask_geometry_rejects_shape_mismatch(self) -> None:
         with self.assertRaisesRegex(ValueError, "geometry"):
             validate_mask_geometry((4, 4, 4), (4, 4, 3))

@@ -46,10 +46,23 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def segmentation_signature(modelname: str, fillmodel: str | None) -> str:
+    modelname, fillmodel = resolve_model_selection(modelname, fillmodel)
     return (
         f"lungmask={version('lungmask')};model={modelname};"
         f"fill={fillmodel or 'none'};postprocessing=1;v=1"
     )
+
+
+def resolve_model_selection(
+    modelname: str,
+    fillmodel: str | None,
+) -> tuple[str, str | None]:
+    """Translate lungmask's CLI preset name to the Python API model names."""
+    if fillmodel is not None and fillmodel.strip().lower() in {"", "none", "null"}:
+        fillmodel = None
+    if modelname == "LTRCLobes_R231":
+        return "LTRCLobes", "R231"
+    return modelname, fillmodel
 
 
 def write_qc_preview(ct_path: Path, mask_path: Path, output_path: Path) -> list[int]:
@@ -78,6 +91,7 @@ def create_inferer(
 ) -> object:
     from lungmask import LMInferer
 
+    modelname, fillmodel = resolve_model_selection(modelname, fillmodel)
     return LMInferer(
         modelname=modelname,
         fillmodel=fillmodel,
@@ -101,8 +115,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("artifacts/segmentation/lungmask_corrected"),
     )
-    parser.add_argument("--modelname", default="LTRCLobes_R231")
-    parser.add_argument("--fillmodel", default="R231")
+    parser.add_argument("--modelname", default="R231")
+    parser.add_argument("--fillmodel")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--force-cpu", action="store_true")
     parser.add_argument("--limit", type=int)

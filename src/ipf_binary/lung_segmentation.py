@@ -48,10 +48,17 @@ def compute_mask_qc(
     total = int(array.size)
     volume_ml = float(nonzero * np.prod(spacing) / 1000.0)
     labels_present = sorted(int(value) for value in np.unique(array[foreground]))
+    per_label_largest_component_fraction: dict[str, float] = {}
     if nonzero:
-        components, component_count = ndimage.label(foreground)
-        component_sizes = np.bincount(components.ravel())[1:]
-        largest_component_fraction = float(component_sizes.max() / nonzero)
+        component_count = 0
+        for label in labels_present:
+            label_foreground = array == label
+            components, label_component_count = ndimage.label(label_foreground)
+            component_sizes = np.bincount(components.ravel())[1:]
+            label_fraction = float(component_sizes.max() / label_foreground.sum())
+            per_label_largest_component_fraction[str(label)] = label_fraction
+            component_count += int(label_component_count)
+        largest_component_fraction = min(per_label_largest_component_fraction.values())
         boundary_touch_fraction = float(_boundary_foreground_count(foreground) / nonzero)
     else:
         component_count = 0
@@ -97,5 +104,6 @@ def compute_mask_qc(
         "label_voxel_counts": label_voxel_counts(array),
         "connected_components": int(component_count),
         "largest_component_fraction": largest_component_fraction,
+        "per_label_largest_component_fraction": per_label_largest_component_fraction,
         "boundary_touch_fraction": boundary_touch_fraction,
     }

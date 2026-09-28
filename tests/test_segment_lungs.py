@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import SimpleITK as sitk
 
-from ipf_binary.segment_lungs import segment_one
+from ipf_binary.segment_lungs import resolve_model_selection, segment_one
 
 
 class ConstantInferer:
@@ -19,6 +19,15 @@ class ConstantInferer:
 
 
 class SegmentLungsTests(unittest.TestCase):
+    def test_ltrc_lobes_preset_resolves_to_lungmask_model_names(self) -> None:
+        self.assertEqual(
+            resolve_model_selection("LTRCLobes_R231", "R231"),
+            ("LTRCLobes", "R231"),
+        )
+
+    def test_textual_none_disables_fill_model(self) -> None:
+        self.assertEqual(resolve_model_selection("R231", "none"), ("R231", None))
+
     def test_segment_one_preserves_sitk_geometry(self) -> None:
         with TemporaryDirectory() as directory:
             input_path = Path(directory) / "ct.nii.gz"

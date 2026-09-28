@@ -70,15 +70,17 @@ $CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
 
 ## 肺野/肺叶分割和可视化
 
+正式批处理默认使用 `lungmask` 的 `R231` 病理肺模型生成左右肺野标签；它在严重间质性改变病例上更稳健，且能够在当前队列规模上完成。若研究问题明确需要肺叶标签，可显式传入 `--modelname LTRCLobes_R231 --fillmodel R231`，但该组合的逐连通域融合后处理明显更慢，应先另做小样本计时和质控。
+
 ```powershell
 # 安装本地分割依赖。
 .\.venv\Scripts\python.exe -m pip install -e '.[segmentation]'
 
-# 先从开发队列选定少量病例，通过 --limit 运行冒烟和人工叠加图复核。
-.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --limit 8
+# 先从开发队列选定少量病例，生成 QC 预览并人工复核。
+.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --limit 8 --write-previews
 
 # 冒烟通过后对 651 人运行可恢复批处理。
-.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs
+.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --write-previews
 
 # 在肺区域内重新提取特征，用固定时间外方案与原基线比较。
 .\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `

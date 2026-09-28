@@ -109,7 +109,7 @@ Expected: import failure for `ipf_binary.segment_lungs`.
 
 - [ ] **Step 3: Implement the lungmask adapter and resumable CLI**
 
-Instantiate `LMInferer(modelname="LTRCLobes_R231", fillmodel="R231")` once per process. Read with SimpleITK, call the inferer, write a UInt8 mask after `CopyInformation`, calculate Task 1 QC, and atomically replace completed `.nii.gz` and `.json` files. Reuse output only when source SHA-256 and segmentation signature match; otherwise re-run that case.
+Instantiate `LMInferer(modelname="R231", fillmodel=None)` once per process for the scalable whole-lung baseline. `LTRCLobes_R231` remains an explicit optional preset and must resolve to the Python API pair `modelname="LTRCLobes", fillmodel="R231"`; on this cohort its fusion postprocessing is too slow for the primary 651-case run. Read with SimpleITK, call the inferer, write a UInt8 mask after `CopyInformation`, calculate Task 1 QC per anatomical label, and atomically replace completed `.nii.gz` and `.json` files. Reuse output only when source SHA-256 and segmentation signature match; otherwise re-run that case.
 
 - [ ] **Step 4: Run focused and full tests**
 
