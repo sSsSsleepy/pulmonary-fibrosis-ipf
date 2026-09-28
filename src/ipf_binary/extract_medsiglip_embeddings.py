@@ -14,6 +14,8 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoProcessor
 
 from .ct_io import load_ct_slices
+from .embedding_records import make_embedding_record, preprocessing_signature, record_is_reusable
+from .leakage import sha256_file
 
 
 def sigmoid(value: float) -> float:
@@ -105,13 +107,29 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     index_path = args.output_dir / "embedding_index.csv"
     existing = pd.read_csv(index_path, dtype={"patient_id": "string", "ct_id": "string"}) if index_path.exists() else pd.DataFrame()
-    existing_by_ct = set(existing["ct_id"].astype(str)) if not existing.empty else set()
+    existing_by_ct = (
+        {str(record["ct_id"]): record for record in existing.to_dict("records")}
+        if not existing.empty
+        else {}
+    )
     output_records = existing.to_dict("records") if not existing.empty else []
 
     for row in tqdm(manifest.itertuples(index=False), total=len(manifest), desc="MedSigLIP CT scans"):
         ct_id = str(row.ct_id)
         output_path = args.output_dir / f"{ct_id}.npz"
-        if not args.overwrite and ct_id in existing_by_ct and output_path.exists():
+        series_sha256 = sha256_file(Path(row.series_path))
+        signature = preprocessing_signature(args.slices, args.window_mode)
+        if (
+            not args.overwrite
+            and ct_id in existing_by_ct
+            and record_is_reusable(
+                existing_by_ct[ct_id],
+                output_path,
+                series_sha256,
+                args.model_id,
+                signature,
+            )
+        ):
             continue
         try:
             images, slice_indices = load_ct_slices(Path(row.series_path), args.slices, args.window_mode)
@@ -136,19 +154,17 @@ def main() -> None:
             )
             output_records = [record for record in output_records if str(record.get("ct_id")) != ct_id]
             output_records.append(
-                {
-                    "patient_id": str(row.patient_id),
-                    "ct_id": ct_id,
-                    "label": int(row.label),
-                    "split": row.split,
-                    "scan_date": row.scan_date,
-                    "embedding_path": str(output_path.resolve()),
-                    "zero_shot_score": float(slice_scores.mean()),
-                    "slice_count": int(len(slice_indices)),
-                    "window_mode": args.window_mode,
-                    "model_id": args.model_id,
-                    "status": "ok",
-                }
+                make_embedding_record(
+                    row,
+                    output_path,
+                    pooled,
+                    slice_indices,
+                    slice_scores,
+                    args.model_id,
+                    args.window_mode,
+                    args.slices,
+                    series_sha256,
+                )
             )
         except Exception as exc:
             output_records.append(
@@ -156,13 +172,17 @@ def main() -> None:
                     "patient_id": str(row.patient_id),
                     "ct_id": ct_id,
                     "label": int(row.label),
-                    "split": row.split,
+                    "evaluation_group": str(
+                        getattr(row, "evaluation_group", getattr(row, "split", ""))
+                    ),
                     "scan_date": row.scan_date,
                     "embedding_path": "",
                     "zero_shot_score": np.nan,
                     "slice_count": 0,
                     "window_mode": args.window_mode,
                     "model_id": args.model_id,
+                    "series_sha256": series_sha256,
+                    "preprocessing_signature": signature,
                     "status": f"error:{type(exc).__name__}:{exc}",
                 }
             )
