@@ -49,8 +49,9 @@
 
 ```powershell
 # 生成新队列：651 人，IPF 326，非 IPF 325。
+$CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
 .\.venv\Scripts\python.exe -m ipf_binary.build_corrected_cohort `
-  --corrected-labels 'C:\Users\98187\OneDrive\xwechat_files\wxid_qr4vuxeg6m1g22_da3c\msg\file\2026-09\标准化出院诊断.xlsx'
+  --corrected-labels $CorrectedLabels
 
 # 检查跨患者 DICOM UID 重复，并对入模 CT 生成 SHA-256 指纹。
 .\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_cohort
