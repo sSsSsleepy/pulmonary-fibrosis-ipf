@@ -13,7 +13,7 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModel, AutoProcessor
 
-from .ct_io import load_ct_slices
+from .ct_io import load_ct_slices, load_masked_ct_slices
 from .embedding_records import make_embedding_record, preprocessing_signature, record_is_reusable
 from .leakage import sha256_file
 
@@ -73,6 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slices", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--window-mode", choices=("lung", "tri"), default="lung")
+    parser.add_argument("--input-mode", choices=("full", "lung-masked"), default="full")
+    parser.add_argument("--mask-index", type=Path)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -85,6 +87,20 @@ def main() -> None:
     if args.cohort == "index":
         manifest = manifest.loc[manifest["is_index_ct"] == 1].copy()
     manifest = manifest.loc[manifest["series_path"].fillna("").ne("")].copy()
+    if args.input_mode == "lung-masked":
+        if args.mask_index is None:
+            raise ValueError("--mask-index is required for lung-masked input")
+        mask_index = pd.read_csv(
+            args.mask_index,
+            dtype={"patient_id": "string", "ct_id": "string"},
+        )
+        mask_index = mask_index.loc[mask_index["status"].isin(["passed", "warning"])].copy()
+        manifest = manifest.merge(
+            mask_index[["patient_id", "ct_id", "mask_path"]],
+            on=["patient_id", "ct_id"],
+            how="inner",
+            validate="one_to_one",
+        )
     if args.limit is not None:
         manifest = manifest.head(args.limit).copy()
 
@@ -118,7 +134,15 @@ def main() -> None:
         ct_id = str(row.ct_id)
         output_path = args.output_dir / f"{ct_id}.npz"
         series_sha256 = sha256_file(Path(row.series_path))
-        signature = preprocessing_signature(args.slices, args.window_mode)
+        mask_sha256 = ""
+        if args.input_mode == "lung-masked":
+            mask_sha256 = sha256_file(Path(row.mask_path))
+        signature = preprocessing_signature(
+            args.slices,
+            args.window_mode,
+            input_mode=args.input_mode,
+            mask_sha256=mask_sha256,
+        )
         if (
             not args.overwrite
             and ct_id in existing_by_ct
@@ -132,7 +156,19 @@ def main() -> None:
         ):
             continue
         try:
-            images, slice_indices = load_ct_slices(Path(row.series_path), args.slices, args.window_mode)
+            if args.input_mode == "lung-masked":
+                images, slice_indices = load_masked_ct_slices(
+                    Path(row.series_path),
+                    Path(row.mask_path),
+                    args.slices,
+                    args.window_mode,
+                )
+            else:
+                images, slice_indices = load_ct_slices(
+                    Path(row.series_path),
+                    args.slices,
+                    args.window_mode,
+                )
             slice_embeddings, slice_scores = extract_one(
                 model,
                 processor,
@@ -164,6 +200,8 @@ def main() -> None:
                     args.window_mode,
                     args.slices,
                     series_sha256,
+                    input_mode=args.input_mode,
+                    mask_sha256=mask_sha256,
                 )
             )
         except Exception as exc:
@@ -180,8 +218,10 @@ def main() -> None:
                     "zero_shot_score": np.nan,
                     "slice_count": 0,
                     "window_mode": args.window_mode,
+                    "input_mode": args.input_mode,
                     "model_id": args.model_id,
                     "series_sha256": series_sha256,
+                    "mask_sha256": mask_sha256,
                     "preprocessing_signature": signature,
                     "status": f"error:{type(exc).__name__}:{exc}",
                 }
