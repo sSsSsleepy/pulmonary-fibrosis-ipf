@@ -5,6 +5,37 @@ from collections.abc import Mapping
 import numpy as np
 
 
+def build_occluded_tiles(
+    image: np.ndarray,
+    lung_mask: np.ndarray,
+    slice_position: int,
+    grid_size: int = 12,
+    fill_value: int = 55,
+) -> tuple[dict[tuple[int, int, int], np.ndarray], dict[tuple[int, int, int], tuple[int, int, int, int]]]:
+    pixels = np.asarray(image)
+    mask = np.asarray(lung_mask, dtype=bool)
+    if pixels.ndim != 3 or pixels.shape[2] != 3 or mask.shape != pixels.shape[:2]:
+        raise ValueError("RGB image and lung mask must share a 2D shape")
+    if grid_size <= 0:
+        raise ValueError("grid_size must be positive")
+    row_edges = np.rint(np.linspace(0, pixels.shape[0], grid_size + 1)).astype(int)
+    column_edges = np.rint(np.linspace(0, pixels.shape[1], grid_size + 1)).astype(int)
+    tiles: dict[tuple[int, int, int], np.ndarray] = {}
+    bounds: dict[tuple[int, int, int], tuple[int, int, int, int]] = {}
+    for row in range(grid_size):
+        row_start, row_end = int(row_edges[row]), int(row_edges[row + 1])
+        for column in range(grid_size):
+            column_start, column_end = int(column_edges[column]), int(column_edges[column + 1])
+            if not mask[row_start:row_end, column_start:column_end].any():
+                continue
+            key = (int(slice_position), row, column)
+            occluded = pixels.copy()
+            occluded[row_start:row_end, column_start:column_end] = np.uint8(fill_value)
+            tiles[key] = occluded
+            bounds[key] = (row_start, row_end, column_start, column_end)
+    return tiles, bounds
+
+
 def pool_slice_embeddings(embeddings: np.ndarray) -> np.ndarray:
     matrix = np.asarray(embeddings, dtype=np.float32)
     if matrix.ndim != 2 or matrix.shape[0] == 0:

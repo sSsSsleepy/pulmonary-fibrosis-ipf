@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from ipf_binary.attention import (
+    build_occluded_tiles,
     interpolate_attention_volume,
     occlusion_delta_probability,
     pool_slice_embeddings,
@@ -18,6 +19,24 @@ class SumProbabilityModel:
 
 
 class AttentionTests(unittest.TestCase):
+    def test_build_occluded_tiles_limits_tiles_to_lung_roi(self) -> None:
+        image = np.full((4, 4, 3), 100, dtype=np.uint8)
+        mask = np.zeros((4, 4), dtype=bool)
+        mask[:2, :2] = True
+
+        tiles, bounds = build_occluded_tiles(
+            image,
+            mask,
+            slice_position=3,
+            grid_size=2,
+            fill_value=55,
+        )
+
+        self.assertEqual(list(tiles), [(3, 0, 0)])
+        self.assertEqual(bounds[(3, 0, 0)], (0, 2, 0, 2))
+        np.testing.assert_array_equal(tiles[(3, 0, 0)][:2, :2], 55)
+        np.testing.assert_array_equal(tiles[(3, 0, 0)][2:, 2:], 100)
+
     def test_pool_slice_embeddings_matches_mean_plus_max(self) -> None:
         embeddings = np.asarray([[1.0, 4.0], [3.0, 2.0]])
 

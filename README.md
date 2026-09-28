@@ -67,6 +67,31 @@
 
 正式报告同时给出采集年份、扫描设备、层厚、重建核和序列描述构成的元数据对照模型，用于判断影像模型是否只学到了采集域差异。
 
+## 肺野/肺叶分割和可视化
+
+```powershell
+# 安装本地分割依赖。
+.\.venv\Scripts\python.exe -m pip install -e '.[segmentation]'
+
+# 先从开发队列选定少量病例，通过 --limit 运行冒烟和人工叠加图复核。
+.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --limit 8
+
+# 冒烟通过后对 651 人运行可恢复批处理。
+.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs
+
+# 在肺区域内重新提取特征，用固定时间外方案与原基线比较。
+.\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
+  --manifest artifacts/manifests_corrected/corrected_lung_index_ct_manifest.csv `
+  --mask-index artifacts/segmentation/lungmask_corrected/segmentation_index.csv `
+  --input-mode lung-masked `
+  --output-dir artifacts/embeddings/medsiglip_corrected_lung_masked
+
+# 只解释显式指定的开发队列 CT；不会自动挑选“漂亮”病例。
+.\.venv\Scripts\python.exe -m ipf_binary.explain_corrected_probe --ct-id CT00000000
+```
+
+`segment_lungs` 生成的是肺部解剖掩膜。`explain_corrected_probe` 生成的是局部遮挡后分类概率变化热图，固定标注为 **model attention, not fibrosis segmentation**；在没有医生像素级标注和独立分割评估前，不得把该热图称为纤维化病灶分割。
+
 如果 MedSigLIP 尚未完成 Hugging Face 授权，可先用公开的 MIT 许可 BiomedCLIP 做端到端技术冒烟：
 
 ```powershell
