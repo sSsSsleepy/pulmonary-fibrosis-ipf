@@ -9,6 +9,7 @@ from ipf_binary.visualization import (
     explanation_metadata,
     render_axial_overlay,
     render_projection_panel,
+    render_segmentation_montage,
 )
 
 
@@ -51,6 +52,17 @@ class VisualizationTests(unittest.TestCase):
         image = render_projection_panel(ct, mask, attention)
 
         self.assertGreater(image.width, image.height)
+
+    def test_segmentation_montage_samples_only_lung_extent(self) -> None:
+        ct = np.full((8, 8, 8), -700.0)
+        mask = np.zeros_like(ct, dtype=np.uint8)
+        mask[2:6, 2:6, 2:6] = 1
+
+        image, indices = render_segmentation_montage(ct, mask, count=3)
+
+        self.assertEqual(indices.tolist(), [2, 4, 5])
+        self.assertEqual(image.width, 24)
+        self.assertGreater(image.height, 8)
 
 
 if __name__ == "__main__":

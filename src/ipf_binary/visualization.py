@@ -124,6 +124,45 @@ def render_montage(
     return canvas
 
 
+def render_segmentation_montage(
+    ct_volume: np.ndarray,
+    mask_volume: np.ndarray,
+    count: int = 8,
+) -> tuple[Image.Image, np.ndarray]:
+    ct = np.asarray(ct_volume, dtype=np.float32)
+    mask = np.asarray(mask_volume)
+    if ct.ndim != 3 or mask.shape != ct.shape:
+        raise ValueError("CT and mask volumes must share a 3D shape")
+    if count <= 0:
+        raise ValueError("count must be positive")
+    occupied = np.flatnonzero(np.any(mask > 0, axis=(0, 1)))
+    if occupied.size == 0:
+        raise ValueError("cannot render an empty lung mask")
+    indices = np.unique(
+        np.rint(
+            np.linspace(
+                int(occupied.min()),
+                int(occupied.max()),
+                min(count, int(occupied.size)),
+            )
+        ).astype(int)
+    )
+    panels = [
+        render_axial_overlay(
+            ct[:, :, int(index)],
+            mask[:, :, int(index)],
+            np.zeros(ct.shape[:2], dtype=np.float32),
+        )
+        for index in indices
+    ]
+    montage = render_montage(
+        panels,
+        columns=len(panels),
+        title="anatomical lung/lobe segmentation QC",
+    )
+    return montage, indices
+
+
 def explanation_metadata(ct_id: str, probability: float) -> dict[str, Any]:
     return {
         "ct_id": str(ct_id),

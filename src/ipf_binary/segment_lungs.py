@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import nibabel as nib
 import pandas as pd
 import SimpleITK as sitk
 from tqdm import tqdm
 
 from .leakage import sha256_file
 from .lung_segmentation import compute_mask_qc, validate_mask_geometry
+from .visualization import render_segmentation_montage
 
 
 def segment_one(input_path: Path, output_path: Path, inferer: object) -> dict[str, Any]:
@@ -48,6 +50,24 @@ def segmentation_signature(modelname: str, fillmodel: str | None) -> str:
         f"lungmask={version('lungmask')};model={modelname};"
         f"fill={fillmodel or 'none'};postprocessing=1;v=1"
     )
+
+
+def write_qc_preview(ct_path: Path, mask_path: Path, output_path: Path) -> list[int]:
+    ct_image = nib.load(str(ct_path))
+    mask_image = nib.load(str(mask_path))
+    if tuple(ct_image.shape) != tuple(mask_image.shape) or not np.allclose(
+        ct_image.affine,
+        mask_image.affine,
+        atol=1e-3,
+        rtol=0,
+    ):
+        raise ValueError("CT/mask geometry mismatch while rendering QC preview")
+    ct = ct_image.get_fdata(dtype=np.float32, caching="unchanged")
+    mask = mask_image.get_fdata(dtype=np.float32, caching="unchanged").astype(np.uint8)
+    montage, indices = render_segmentation_montage(ct, mask)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    montage.save(output_path)
+    return [int(value) for value in indices]
 
 
 def create_inferer(
@@ -87,6 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-cpu", action="store_true")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--write-previews", action="store_true")
     return parser.parse_args()
 
 
@@ -134,6 +155,7 @@ def main() -> None:
             source_sha = sha256_file(source_path)
         mask_path = args.output_dir / "masks" / f"{ct_id}.nii.gz"
         qc_path = args.output_dir / "qc" / f"{ct_id}.json"
+        preview_path = args.output_dir / "previews" / f"{ct_id}.png"
         previous = existing_by_ct.get(ct_id, {})
         reusable = bool(
             not args.overwrite
@@ -160,6 +182,12 @@ def main() -> None:
                 "source_sha256": source_sha,
                 "segmentation_signature": signature,
             }
+            if args.write_previews and qc["status"] != "failed":
+                qc_payload["preview_slice_indices"] = write_qc_preview(
+                    source_path,
+                    mask_path,
+                    preview_path,
+                )
             _write_json_atomic(qc_path, qc_payload)
             record = {
                 "patient_id": str(row.patient_id),
@@ -167,6 +195,7 @@ def main() -> None:
                 "evaluation_group": str(row.evaluation_group),
                 "mask_path": str(mask_path.resolve()),
                 "qc_path": str(qc_path.resolve()),
+                "preview_path": str(preview_path.resolve()) if args.write_previews else "",
                 "source_sha256": source_sha,
                 "segmentation_signature": signature,
                 "status": str(qc["status"]),
@@ -179,6 +208,7 @@ def main() -> None:
                 "evaluation_group": str(row.evaluation_group),
                 "mask_path": "",
                 "qc_path": "",
+                "preview_path": "",
                 "source_sha256": source_sha,
                 "segmentation_signature": signature,
                 "status": f"error:{type(exc).__name__}",
