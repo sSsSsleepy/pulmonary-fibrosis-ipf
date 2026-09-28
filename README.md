@@ -43,6 +43,30 @@
 .\.venv\Scripts\python.exe -m ipf_binary.audit_probe --result-dir artifacts/results/medsiglip_lung_linear_probe_formal
 ```
 
+## 修正标签的正式时间外验证
+
+旧的随机训练/验证/测试划分已用于方案迭代，只保留为探索性结果。修正标签实验仅使用 651 名多次记录标签一致的患者，并将 2024–2026 年 83 人锁定为时间外测试集。
+
+```powershell
+# 生成新队列：651 人，IPF 326，非 IPF 325。
+.\.venv\Scripts\python.exe -m ipf_binary.build_corrected_cohort `
+  --corrected-labels 'C:\Users\98187\OneDrive\xwechat_files\wxid_qr4vuxeg6m1g22_da3c\msg\file\2026-09\标准化出院诊断.xlsx'
+
+# 检查跨患者 DICOM UID 重复，并对入模 CT 生成 SHA-256 指纹。
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_cohort
+
+# 新输出目录不会复用缺少 CT 指纹的旧特征。
+.\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
+  --manifest artifacts/manifests_corrected/corrected_lung_index_ct_manifest.csv `
+  --output-dir artifacts/embeddings/medsiglip_corrected
+
+# 只在 2011–2023 年开发队列内选模型和阈值；时间外测试只评估一次。
+.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe
+```
+
+正式报告同时给出采集年份、扫描设备、层厚、重建核和序列描述构成的元数据对照模型，用于判断影像模型是否只学到了采集域差异。
+
 如果 MedSigLIP 尚未完成 Hugging Face 授权，可先用公开的 MIT 许可 BiomedCLIP 做端到端技术冒烟：
 
 ```powershell
