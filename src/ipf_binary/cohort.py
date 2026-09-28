@@ -110,7 +110,7 @@ def build_corrected_cohort(
     audit: dict[str, Any] = {
         "index_manifest_patients": int(len(manifest)),
         "corrected_cohort_patients": int(len(cohort)),
-        "excluded_without_corrected_label": int(len(manifest) - len(cohort)),
+        "excluded_not_in_consistent_label_cohort": int(len(manifest) - len(cohort)),
         "label_0": int(counts.get(0, 0)),
         "label_1": int(counts.get(1, 0)),
         "development_patients": int(group_counts.get("development", 0)),

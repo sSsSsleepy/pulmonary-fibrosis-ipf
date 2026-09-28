@@ -65,6 +65,8 @@ class CorrectedCohortTests(unittest.TestCase):
         self.assertEqual(cohort["label"].tolist(), [0, 1])
         self.assertNotIn("split", cohort.columns)
         self.assertEqual(audit["temporal_test_patients"], 1)
+        self.assertEqual(audit["excluded_not_in_consistent_label_cohort"], 0)
+        self.assertNotIn("excluded_without_corrected_label", audit)
 
     def test_missing_scan_date_is_rejected(self) -> None:
         manifest = pd.DataFrame(
