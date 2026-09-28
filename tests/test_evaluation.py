@@ -6,6 +6,7 @@ import numpy as np
 
 from ipf_binary.evaluation import (
     bootstrap_auc_ci,
+    bootstrap_metric_intervals,
     fit_final_probe,
     paired_bootstrap_auc_difference,
     select_model_nested_cv,
@@ -58,6 +59,30 @@ class EvaluationTests(unittest.TestCase):
 
         self.assertLessEqual(result["ci95_low"], result["estimate"])
         self.assertGreaterEqual(result["ci95_high"], result["estimate"])
+
+    def test_bootstrap_metric_intervals_cover_primary_metrics(self) -> None:
+        labels = np.asarray([0, 0, 0, 1, 1, 1])
+        probability = np.asarray([0.1, 0.2, 0.4, 0.6, 0.8, 0.9])
+
+        result = bootstrap_metric_intervals(
+            labels,
+            probability,
+            threshold=0.5,
+            seed=7,
+            iterations=100,
+        )
+
+        for metric in (
+            "roc_auc",
+            "pr_auc",
+            "balanced_accuracy",
+            "sensitivity",
+            "specificity",
+            "brier",
+        ):
+            self.assertIn(metric, result)
+            self.assertLessEqual(result[metric]["ci95_low"], result[metric]["estimate"])
+            self.assertGreaterEqual(result[metric]["ci95_high"], result[metric]["estimate"])
 
     def test_paired_bootstrap_reports_positive_difference(self) -> None:
         labels = np.asarray([0, 0, 0, 1, 1, 1])

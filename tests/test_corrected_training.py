@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
 
 from ipf_binary.train_corrected_probe import (
     fit_final_metadata_probe,
+    ensure_temporal_output_is_unlocked,
+    membership_sha256,
     metadata_feature_columns,
+    validate_embedding_provenance,
     validate_evaluation_groups,
 )
 
@@ -65,6 +70,73 @@ class CorrectedTrainingTests(unittest.TestCase):
         self.assertGreater(threshold, 0.0)
         self.assertLess(threshold, 1.0)
         self.assertEqual(model.predict_proba(frame).shape, (40, 2))
+
+    def test_embedding_provenance_rejects_mixed_model_revisions(self) -> None:
+        data = pd.DataFrame(
+            {
+                "patient_id": ["p1", "p2"],
+                "ct_id": ["c1", "c2"],
+                "series_path": ["one.nii.gz", "two.nii.gz"],
+                "series_sha256": ["a" * 64, "b" * 64],
+                "model_id": ["model", "model"],
+                "model_revision": ["rev1", "rev2"],
+                "input_mode": ["full", "full"],
+                "window_mode": ["lung", "lung"],
+                "slice_count_requested": [16, 16],
+                "feature_dimension": [2304, 2304],
+                "mask_sha256": ["", ""],
+                "preprocessing_signature": [
+                    "slices=16;window=lung;pool=mean+max;v=2",
+                    "slices=16;window=lung;pool=mean+max;v=2",
+                ],
+                "embedding_sha256": ["c" * 64, "d" * 64],
+            }
+        )
+        fingerprints = data[["patient_id", "ct_id", "series_sha256"]].copy()
+
+        with self.assertRaisesRegex(AssertionError, "model_revision"):
+            validate_embedding_provenance(data, fingerprints, verify_source_files=False)
+
+    def test_embedding_provenance_rejects_stale_ct_hash(self) -> None:
+        data = pd.DataFrame(
+            {
+                "patient_id": ["p1"],
+                "ct_id": ["c1"],
+                "series_path": ["one.nii.gz"],
+                "series_sha256": ["a" * 64],
+                "model_id": ["model"],
+                "model_revision": ["rev1"],
+                "input_mode": ["full"],
+                "window_mode": ["lung"],
+                "slice_count_requested": [16],
+                "feature_dimension": [2304],
+                "mask_sha256": [""],
+                "preprocessing_signature": ["slices=16;window=lung;pool=mean+max;v=2"],
+                "embedding_sha256": ["c" * 64],
+            }
+        )
+        fingerprints = pd.DataFrame(
+            {"patient_id": ["p1"], "ct_id": ["c1"], "series_sha256": ["b" * 64]}
+        )
+
+        with self.assertRaisesRegex(AssertionError, "fingerprint"):
+            validate_embedding_provenance(data, fingerprints, verify_source_files=False)
+
+    def test_temporal_lock_requires_explicit_overwrite(self) -> None:
+        with TemporaryDirectory() as directory:
+            result_dir = Path(directory)
+            (result_dir / "temporal_evaluation.lock.json").write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(FileExistsError, "temporal"):
+                ensure_temporal_output_is_unlocked(result_dir, allow_overwrite=False)
+            ensure_temporal_output_is_unlocked(result_dir, allow_overwrite=True)
+
+    def test_membership_hash_is_order_independent(self) -> None:
+        frame = pd.DataFrame(
+            {"patient_id": ["p2", "p1"], "ct_id": ["c2", "c1"], "label": [1, 0]}
+        )
+
+        self.assertEqual(membership_sha256(frame), membership_sha256(frame.iloc[::-1]))
 
 
 if __name__ == "__main__":

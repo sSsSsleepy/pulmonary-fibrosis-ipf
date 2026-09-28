@@ -14,7 +14,13 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoProcessor
 
 from .ct_io import load_ct_slices, load_masked_ct_slices
-from .embedding_records import make_embedding_record, preprocessing_signature, record_is_reusable
+from .embedding_records import (
+    make_embedding_record,
+    preprocessing_signature,
+    record_is_reusable,
+    resolve_model_revision,
+    write_embedding_archive_atomic,
+)
 from .leakage import sha256_file
 
 
@@ -118,6 +124,7 @@ def main() -> None:
         cache_dir=str(args.cache_dir),
     ).to(device)
     model.eval()
+    model_revision = resolve_model_revision(model)
     processor = AutoProcessor.from_pretrained(args.model_id, cache_dir=str(args.cache_dir))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +158,7 @@ def main() -> None:
                 output_path,
                 series_sha256,
                 args.model_id,
+                model_revision,
                 signature,
             )
         ):
@@ -181,10 +189,10 @@ def main() -> None:
             pooled = np.concatenate(
                 [slice_embeddings.mean(axis=0), slice_embeddings.max(axis=0)], axis=0
             ).astype(np.float32)
-            np.savez_compressed(
+            embedding_sha256 = write_embedding_archive_atomic(
                 output_path,
                 pooled_embedding=pooled,
-                slice_embeddings=slice_embeddings.astype(np.float16),
+                slice_embeddings=slice_embeddings.astype(np.float32),
                 slice_indices=slice_indices.astype(np.int16),
                 zero_shot_slice_scores=slice_scores,
             )
@@ -197,14 +205,17 @@ def main() -> None:
                     slice_indices,
                     slice_scores,
                     args.model_id,
+                    model_revision,
                     args.window_mode,
                     args.slices,
                     series_sha256,
+                    embedding_sha256,
                     input_mode=args.input_mode,
                     mask_sha256=mask_sha256,
                 )
             )
         except Exception as exc:
+            output_records = [record for record in output_records if str(record.get("ct_id")) != ct_id]
             output_records.append(
                 {
                     "patient_id": str(row.patient_id),
@@ -220,9 +231,12 @@ def main() -> None:
                     "window_mode": args.window_mode,
                     "input_mode": args.input_mode,
                     "model_id": args.model_id,
+                    "model_revision": model_revision,
                     "series_sha256": series_sha256,
+                    "embedding_sha256": "",
                     "mask_sha256": mask_sha256,
                     "preprocessing_signature": signature,
+                    "feature_dimension": 0,
                     "status": f"error:{type(exc).__name__}:{exc}",
                 }
             )
@@ -233,6 +247,7 @@ def main() -> None:
             {
                 "device": str(device),
                 "model_id": args.model_id,
+                "model_revision": model_revision,
                 "requested_scans": int(len(manifest)),
                 "successful_scans": int(sum(record.get("status") == "ok" for record in output_records)),
                 "index_path": str(index_path.resolve()),

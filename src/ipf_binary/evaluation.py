@@ -257,6 +257,56 @@ def bootstrap_auc_ci(
     }
 
 
+def bootstrap_metric_intervals(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    threshold: float,
+    seed: int,
+    *,
+    iterations: int = 2000,
+) -> dict[str, dict[str, float | int]]:
+    y = np.asarray(labels, dtype=int)
+    p = np.asarray(probabilities, dtype=float)
+    if len(y) != len(p):
+        raise ValueError("probabilities must align with labels")
+    metric_names = (
+        "roc_auc",
+        "pr_auc",
+        "accuracy",
+        "balanced_accuracy",
+        "sensitivity",
+        "specificity",
+        "ppv",
+        "npv",
+        "f1",
+        "brier",
+    )
+    estimate = metrics_at_threshold(y, p, threshold)
+    values: dict[str, list[float]] = {name: [] for name in metric_names}
+    rng = np.random.default_rng(seed)
+    for _ in range(iterations):
+        sample = rng.integers(0, len(y), size=len(y))
+        if np.unique(y[sample]).size != 2:
+            continue
+        sampled = metrics_at_threshold(y[sample], p[sample], threshold)
+        for name in metric_names:
+            value = float(sampled[name])
+            if np.isfinite(value):
+                values[name].append(value)
+    result: dict[str, dict[str, float | int]] = {}
+    for name in metric_names:
+        if not values[name]:
+            raise ValueError(f"bootstrap produced no finite values for {name}")
+        lower, upper = np.percentile(values[name], [2.5, 97.5])
+        result[name] = {
+            "estimate": float(estimate[name]),
+            "ci95_low": float(lower),
+            "ci95_high": float(upper),
+            "valid_iterations": int(len(values[name])),
+        }
+    return result
+
+
 def paired_bootstrap_auc_difference(
     labels: np.ndarray,
     image_probabilities: np.ndarray,

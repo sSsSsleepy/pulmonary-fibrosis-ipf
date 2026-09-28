@@ -23,6 +23,7 @@ class LungSegmentationTests(unittest.TestCase):
         self.assertAlmostEqual(qc["volume_ml"], 0.512)
         self.assertEqual(qc["labels_present"], [1, 2])
         self.assertAlmostEqual(qc["largest_component_fraction"], 1.0)
+        self.assertEqual(qc["qc_schema_version"], 2)
 
     def test_separated_left_and_right_lung_labels_are_not_fragmented(self) -> None:
         mask = np.zeros((20, 80, 80), dtype=np.uint8)
@@ -45,6 +46,20 @@ class LungSegmentationTests(unittest.TestCase):
 
         self.assertEqual(qc["status"], "failed")
         self.assertEqual(qc["nonzero_voxels"], 0)
+
+    def test_missing_expected_lung_side_is_warning(self) -> None:
+        mask = np.zeros((20, 80, 80), dtype=np.uint8)
+        mask[2:18, 10:70, 20:60] = 1
+
+        qc = compute_mask_qc(
+            mask,
+            (3.0, 3.0, 3.0),
+            expected_labels={1, 2},
+        )
+
+        self.assertEqual(qc["status"], "warning")
+        self.assertIn("missing_expected_labels", qc["reasons"])
+        self.assertEqual(qc["missing_expected_labels"], [2])
 
     def test_label_voxel_counts_ignores_background(self) -> None:
         mask = np.asarray([[[0, 1], [2, 2]]], dtype=np.uint8)

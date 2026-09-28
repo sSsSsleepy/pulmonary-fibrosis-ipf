@@ -36,6 +36,8 @@ def _boundary_foreground_count(foreground: np.ndarray) -> int:
 def compute_mask_qc(
     mask: np.ndarray,
     spacing_xyz: tuple[float, float, float],
+    *,
+    expected_labels: set[int] | None = None,
 ) -> dict[str, Any]:
     array = np.asarray(mask)
     if array.ndim != 3:
@@ -48,6 +50,9 @@ def compute_mask_qc(
     total = int(array.size)
     volume_ml = float(nonzero * np.prod(spacing) / 1000.0)
     labels_present = sorted(int(value) for value in np.unique(array[foreground]))
+    missing_expected_labels = sorted(
+        set(expected_labels or set()) - set(labels_present)
+    )
     per_label_largest_component_fraction: dict[str, float] = {}
     if nonzero:
         component_count = 0
@@ -91,8 +96,13 @@ def compute_mask_qc(
             reasons.append("lung_volume_outside_expected_range")
         if boundary_touch_fraction > 0.10:
             reasons.append("mask_touches_volume_boundary")
+        if missing_expected_labels:
+            if status == "passed":
+                status = "warning"
+            reasons.append("missing_expected_labels")
 
     return {
+        "qc_schema_version": 2,
         "status": status,
         "reasons": reasons,
         "shape": [int(value) for value in array.shape],
@@ -101,6 +111,7 @@ def compute_mask_qc(
         "volume_ml": volume_ml,
         "foreground_fraction": foreground_fraction,
         "labels_present": labels_present,
+        "missing_expected_labels": missing_expected_labels,
         "label_voxel_counts": label_voxel_counts(array),
         "connected_components": int(component_count),
         "largest_component_fraction": largest_component_fraction,

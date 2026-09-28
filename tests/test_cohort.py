@@ -44,6 +44,19 @@ class CorrectedCohortTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unmapped"):
             derive_consistent_patient_labels(old, corrected)
 
+    def test_missing_identifiers_are_not_normalized_to_nan_strings(self) -> None:
+        old = pd.DataFrame({"CT号": [float("nan")], "登记号": ["001"]})
+        corrected = pd.DataFrame(
+            {
+                "CT号": ["A"],
+                "检查日期": ["2023-01-01"],
+                "是否为特发性肺纤维化": ["否"],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "empty CT"):
+            derive_consistent_patient_labels(old, corrected)
+
     def test_temporal_group_is_derived_only_from_index_scan_year(self) -> None:
         manifest = pd.DataFrame(
             {

@@ -78,6 +78,8 @@ def render_projection_panel(
     ct_volume: np.ndarray,
     mask_volume: np.ndarray,
     attention_volume: np.ndarray,
+    *,
+    title: str = DISCLAIMER,
 ) -> Image.Image:
     ct = np.asarray(ct_volume, dtype=np.float32)
     mask = np.asarray(mask_volume)
@@ -97,9 +99,16 @@ def render_projection_panel(
     height = max(coronal.height, sagittal.height)
     coronal = _resize_height(coronal, height)
     sagittal = _resize_height(sagittal, height)
-    canvas = Image.new("RGB", (coronal.width + sagittal.width, height), "black")
-    canvas.paste(coronal, (0, 0))
-    canvas.paste(sagittal, (coronal.width, 0))
+    banner_height = 28
+    canvas = Image.new(
+        "RGB",
+        (coronal.width + sagittal.width, height + banner_height),
+        "black",
+    )
+    draw = ImageDraw.Draw(canvas)
+    draw.text((8, 7), title, fill=(255, 255, 255))
+    canvas.paste(coronal, (0, banner_height))
+    canvas.paste(sagittal, (coronal.width, banner_height))
     return canvas
 
 

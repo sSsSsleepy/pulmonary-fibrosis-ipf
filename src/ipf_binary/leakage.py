@@ -13,7 +13,7 @@ DICOM_IDENTIFIER_TAGS = {
     "dicom_patient_id": "0010|0020",
     "study_uid": "0020|000d",
     "series_uid": "0020|000e",
-    "sop_uid": "0008|0018",
+    "representative_sop_uid": "0008|0018",
 }
 
 

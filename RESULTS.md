@@ -6,7 +6,7 @@
 
 - 修正诊断且有可用初次肺部 CT 的患者共 651 人：非 IPF 325 人、IPF 326 人。
 - 2011–2023 年作为开发队列（568 人）；2024–2026 年作为锁定时间外测试队列（83 人，其中非 IPF 38 人、IPF 45 人）。
-- 输入 CT 共 74,448,281,275 字节。跨患者 CT 文件、DICOM PatientID、Study UID、Series UID、SOP UID 重复均为 0，开发与时间外测试患者重叠为 0。
+- 输入 CT 共 74,448,281,275 字节。跨患者 CT 文件、DICOM PatientID、Study UID、Series UID 和转换 sidecar 中的代表性 SOP UID 重复均为 0，开发与时间外测试患者重叠为 0。sidecar 不含整套 DICOM 的完整 SOP UID 列表，因此尚不能宣称已完成逐实例 SOP 穷举审计。
 - 651 个 MedSigLIP 特征均由本次修正队列重新提取，记录源 CT SHA-256 与预处理签名；无精确重复或余弦相似度 ≥0.999 的跨患者特征对。
 
 ## 方法

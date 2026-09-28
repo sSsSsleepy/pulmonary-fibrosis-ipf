@@ -56,14 +56,17 @@ $CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
 # 检查跨患者 DICOM UID 重复，并对入模 CT 生成 SHA-256 指纹。
 .\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_cohort
 
-# 新输出目录不会复用缺少 CT 指纹的旧特征。
+# 密封输出目录不会复用缺少 CT 指纹、模型 commit 或文件哈希的旧特征。
 .\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
   --manifest artifacts/manifests_corrected/corrected_lung_index_ct_manifest.csv `
-  --output-dir artifacts/embeddings/medsiglip_corrected
+  --output-dir artifacts/embeddings/medsiglip_corrected_sealed
 
-# 只在 2011–2023 年开发队列内选模型和阈值；时间外测试只评估一次。
-.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe
-.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe
+# 只在 2011–2023 年开发队列内选模型和阈值；输出目录写入时间外评估锁，禁止静默覆盖。
+.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe `
+  --embedding-index artifacts/embeddings/medsiglip_corrected_sealed/embedding_index.csv `
+  --output-dir artifacts/results/medsiglip_corrected_temporal_sealed
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe `
+  --result-dir artifacts/results/medsiglip_corrected_temporal_sealed
 ```
 
 正式报告同时给出采集年份、扫描设备、层厚、重建核和序列描述构成的元数据对照模型，用于判断影像模型是否只学到了采集域差异。
@@ -87,13 +90,21 @@ $CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
   --manifest artifacts/manifests_corrected/corrected_lung_index_ct_manifest.csv `
   --mask-index artifacts/segmentation/lungmask_corrected/segmentation_index.csv `
   --input-mode lung-masked `
-  --output-dir artifacts/embeddings/medsiglip_corrected_lung_masked
+  --output-dir artifacts/embeddings/medsiglip_corrected_lung_masked_sealed
+
+# 用同一训练方案拟合肺掩膜输入，并逐患者配对比较时间外预测。
+.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe `
+  --embedding-index artifacts/embeddings/medsiglip_corrected_lung_masked_sealed/embedding_index.csv `
+  --output-dir artifacts/results/medsiglip_corrected_lung_masked_temporal_sealed
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe `
+  --result-dir artifacts/results/medsiglip_corrected_lung_masked_temporal_sealed
+.\.venv\Scripts\python.exe -m ipf_binary.compare_corrected_probes
 
 # 只解释显式指定的开发队列 CT；不会自动挑选“漂亮”病例。
 .\.venv\Scripts\python.exe -m ipf_binary.explain_corrected_probe --ct-id CT00000000
 ```
 
-`segment_lungs` 生成的是肺部解剖掩膜。`explain_corrected_probe` 生成的是局部遮挡后分类概率变化热图，固定标注为 **model attention, not fibrosis segmentation**；在没有医生像素级标注和独立分割评估前，不得把该热图称为纤维化病灶分割。
+`segment_lungs` 生成的是肺部解剖掩膜。`explain_corrected_probe` 只接受与密封训练清单、分类器哈希、MedSigLIP commit、输入模式和切片参数完全一致的特征，生成的是局部遮挡后分类概率变化热图，并固定标注为 **model attention, not fibrosis segmentation**；在没有医生像素级标注和独立分割评估前，不得把该热图称为纤维化病灶分割。
 
 如果 MedSigLIP 尚未完成 Hugging Face 授权，可先用公开的 MIT 许可 BiomedCLIP 做端到端技术冒烟：
 

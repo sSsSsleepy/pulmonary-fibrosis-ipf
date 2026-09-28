@@ -7,7 +7,12 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import SimpleITK as sitk
 
-from ipf_binary.segment_lungs import resolve_model_selection, segment_one
+from ipf_binary.segment_lungs import (
+    expected_labels_for_model,
+    resolve_verified_source_sha,
+    resolve_model_selection,
+    segment_one,
+)
 
 
 class ConstantInferer:
@@ -27,6 +32,18 @@ class SegmentLungsTests(unittest.TestCase):
 
     def test_textual_none_disables_fill_model(self) -> None:
         self.assertEqual(resolve_model_selection("R231", "none"), ("R231", None))
+
+    def test_expected_labels_follow_selected_anatomy_model(self) -> None:
+        self.assertEqual(expected_labels_for_model("R231"), {1, 2})
+        self.assertEqual(expected_labels_for_model("LTRCLobes_R231"), {1, 2, 3, 4, 5})
+
+    def test_verified_source_hash_rejects_stale_audit_value(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "ct.nii.gz"
+            path.write_bytes(b"current")
+
+            with self.assertRaisesRegex(AssertionError, "fingerprint"):
+                resolve_verified_source_sha(path, "0" * 64)
 
     def test_segment_one_preserves_sitk_geometry(self) -> None:
         with TemporaryDirectory() as directory:

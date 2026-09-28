@@ -9,6 +9,28 @@ from PIL import Image
 from .core import select_slice_indices, tri_window_hu, window_hu
 
 
+def lung_crop_bounds(
+    mask: np.ndarray,
+    padding_fraction: float = 0.05,
+) -> tuple[int, int, int, int]:
+    if padding_fraction < 0:
+        raise ValueError("padding_fraction must be non-negative")
+    if mask.ndim != 3:
+        raise ValueError(f"Expected 3D lung mask, got shape {mask.shape}")
+    foreground = np.argwhere(mask > 0)
+    if foreground.size == 0:
+        raise ValueError("lung mask is empty")
+    lower = foreground.min(axis=0)
+    upper = foreground.max(axis=0) + 1
+    size_xy = upper[:2] - lower[:2]
+    padding_xy = np.ceil(size_xy * padding_fraction).astype(int)
+    x0 = max(0, int(lower[0] - padding_xy[0]))
+    x1 = min(int(mask.shape[0]), int(upper[0] + padding_xy[0]))
+    y0 = max(0, int(lower[1] - padding_xy[1]))
+    y1 = min(int(mask.shape[1]), int(upper[1] + padding_xy[1]))
+    return x0, x1, y0, y1
+
+
 def load_ct_slices(path: Path, count: int, window_mode: str) -> tuple[list[Image.Image], np.ndarray]:
     image = nib.load(str(path))
     if len(image.shape) != 3:
@@ -35,8 +57,6 @@ def load_masked_ct_slices(
     window_mode: str,
     padding_fraction: float = 0.05,
 ) -> tuple[list[Image.Image], np.ndarray]:
-    if padding_fraction < 0:
-        raise ValueError("padding_fraction must be non-negative")
     ct_image = nib.load(str(ct_path))
     mask_image = nib.load(str(mask_path))
     if len(ct_image.shape) != 3 or tuple(ct_image.shape) != tuple(mask_image.shape):
@@ -47,17 +67,7 @@ def load_masked_ct_slices(
         raise ValueError("CT/mask affine mismatch")
 
     mask = mask_image.get_fdata(dtype=np.float32, caching="unchanged") > 0
-    foreground = np.argwhere(mask)
-    if foreground.size == 0:
-        raise ValueError("lung mask is empty")
-    lower = foreground.min(axis=0)
-    upper = foreground.max(axis=0) + 1
-    size_xy = upper[:2] - lower[:2]
-    padding_xy = np.ceil(size_xy * padding_fraction).astype(int)
-    x0 = max(0, int(lower[0] - padding_xy[0]))
-    x1 = min(int(ct_image.shape[0]), int(upper[0] + padding_xy[0]))
-    y0 = max(0, int(lower[1] - padding_xy[1]))
-    y1 = min(int(ct_image.shape[1]), int(upper[1] + padding_xy[1]))
+    x0, x1, y0, y1 = lung_crop_bounds(mask, padding_fraction)
 
     volume = ct_image.get_fdata(dtype=np.float32, caching="unchanged")
     indices = select_slice_indices(int(ct_image.shape[2]), count)

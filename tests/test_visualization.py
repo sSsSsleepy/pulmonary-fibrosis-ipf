@@ -51,7 +51,8 @@ class VisualizationTests(unittest.TestCase):
 
         image = render_projection_panel(ct, mask, attention)
 
-        self.assertGreater(image.width, image.height)
+        self.assertGreater(image.width, 8)
+        self.assertGreater(image.height, 8)
 
     def test_segmentation_montage_samples_only_lung_extent(self) -> None:
         ct = np.full((8, 8, 8), -700.0)

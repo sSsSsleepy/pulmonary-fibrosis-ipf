@@ -21,7 +21,7 @@
 在训练前生成可追溯审计报告，至少包含：
 
 - 队列人数、类别数、排除原因及数量。
-- DICOM PatientID、StudyInstanceUID、SeriesInstanceUID 和 SOPInstanceUID 的跨患者重复检查。
+- DICOM PatientID、StudyInstanceUID、SeriesInstanceUID 和可用 SOPInstanceUID 的跨患者重复检查；若转换 sidecar 仅含代表性 SOP UID，报告必须注明尚未完成全序列逐实例 SOP 穷举。
 - 影像特征精确重复和高余弦相似检查。
 - CT 文件指纹、选定序列和预处理参数的版本记录；只有当输入指纹和预处理版本一致时，才可复用旧 MedSigLIP 特征，否则重新提取。
 - 扫描年份、厂商、设备型号、层厚、重建核和序列描述的分布与标签关联。
@@ -95,7 +95,7 @@
 ## 9. 验收标准
 
 - 队列构建结果严格为 651 人且标签计数为 326/325。
-- 开发与时间外测试无患者、CT、Study/Series/SOP UID 重叠。
+- 开发与时间外测试无患者、CT、Study/Series UID 重叠；SOP UID 仅在可用元数据覆盖范围内无重叠，并明确报告覆盖限制。
 - 任何超参数和阈值选择不访问 2024–2026 年时间外测试标签。
 - 所有主要指标带不确定性区间，且同时报告采集元数据基线。
 - 肺野分割每例都有机器可读质控状态；可视化不将关注热图误称为纤维化病灶。

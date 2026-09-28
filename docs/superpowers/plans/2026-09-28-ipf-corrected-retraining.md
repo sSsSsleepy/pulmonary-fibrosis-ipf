@@ -14,7 +14,7 @@
 
 - Use exactly 651 patients with consistent corrected labels: IPF 326 and non-IPF 325.
 - Exclude 21 label-conflict patients and 66 patients without corrected labels.
-- Use one index CT per patient and never permit patient, CT, Study, Series, or SOP overlap across development and temporal test groups.
+- Use one index CT per patient and never permit patient, CT, Study, or Series overlap across development and temporal test groups. Audit every SOP UID available in source metadata; if only one representative SOP UID is available per converted series, report that coverage limit instead of claiming a complete instance-level audit.
 - Lock all scans from 2024–2026 as the 83-patient temporal test set; it may not influence preprocessing, model, hyperparameter, or threshold selection.
 - Keep CT, spreadsheets, patient manifests, embeddings, fitted models, and individual predictions outside Git through existing ignore rules.
 - Never pass report text or discharge diagnoses into the image classifier.

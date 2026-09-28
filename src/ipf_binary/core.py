@@ -47,7 +47,10 @@ OFF_TARGET_TOKENS = (
 
 
 def normalize_registration_id(value: object) -> str:
-    text = "" if value is None else str(value).strip()
+    missing = value is None or type(value).__name__ in {"NAType", "NaTType"}
+    if isinstance(value, (float, np.floating)):
+        missing = missing or math.isnan(float(value))
+    text = "" if missing else str(value).strip()
     if text.endswith(".0") and text[:-2].isdigit():
         text = text[:-2]
     if text.isdigit():
@@ -56,7 +59,10 @@ def normalize_registration_id(value: object) -> str:
 
 
 def normalize_ct_id(value: object) -> str:
-    text = "" if value is None else str(value).strip().upper()
+    missing = value is None or type(value).__name__ in {"NAType", "NaTType"}
+    if isinstance(value, (float, np.floating)):
+        missing = missing or math.isnan(float(value))
+    text = "" if missing else str(value).strip().upper()
     if text.endswith(".0") and text[:-2].isdigit():
         text = text[:-2]
     return text

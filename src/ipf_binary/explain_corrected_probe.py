@@ -19,8 +19,10 @@ from .attention import (
     occlusion_delta_probability,
     pool_slice_embeddings,
 )
-from .ct_io import load_ct_slices
+from .ct_io import load_ct_slices, load_masked_ct_slices, lung_crop_bounds
+from .embedding_records import resolve_model_revision
 from .extract_medsiglip_embeddings import extract_one
+from .leakage import sha256_file
 from .visualization import (
     DISCLAIMER,
     explanation_metadata,
@@ -45,12 +47,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--embedding-index",
         type=Path,
-        default=Path("artifacts/embeddings/medsiglip_corrected/embedding_index.csv"),
+        default=Path("artifacts/embeddings/medsiglip_corrected_sealed/embedding_index.csv"),
     )
     parser.add_argument(
         "--result-dir",
         type=Path,
-        default=Path("artifacts/results/medsiglip_corrected_temporal"),
+        default=Path("artifacts/results/medsiglip_corrected_temporal_sealed"),
     )
     parser.add_argument(
         "--output-dir",
@@ -60,12 +62,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ct-id", action="append", default=[])
     parser.add_argument("--case-list", type=Path)
     parser.add_argument("--allow-temporal-test", action="store_true")
-    parser.add_argument("--model-id", default="google/medsiglip-448")
     parser.add_argument("--cache-dir", type=Path, default=Path(".model_cache/huggingface"))
     parser.add_argument("--prompt-config", type=Path, default=Path("configs/medsiglip_prompts.json"))
     parser.add_argument("--grid-size", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--slices", type=int, default=16)
     return parser.parse_args()
 
 
@@ -82,6 +82,53 @@ def requested_ct_ids(args: argparse.Namespace) -> list[str]:
     return unique
 
 
+def validate_explanation_binding(
+    manifest: dict[str, object],
+    embedding_index_path: Path,
+    result_dir: Path,
+    rows: pd.DataFrame,
+) -> dict[str, object]:
+    inputs = manifest.get("inputs")
+    artifacts = manifest.get("artifacts")
+    provenance = manifest.get("provenance")
+    if not isinstance(inputs, dict) or not isinstance(artifacts, dict):
+        raise AssertionError("run manifest is missing input or artifact hashes")
+    if not isinstance(provenance, dict):
+        raise AssertionError("run manifest is missing embedding provenance")
+    if sha256_file(embedding_index_path) != str(inputs.get("embedding_index_sha256", "")):
+        raise AssertionError("embedding index differs from the sealed training run")
+    model_path = result_dir / "linear_probe.joblib"
+    if sha256_file(model_path) != str(artifacts.get("image_model_sha256", "")):
+        raise AssertionError("classifier differs from the sealed training run")
+
+    required = (
+        "model_id",
+        "model_revision",
+        "input_mode",
+        "window_mode",
+        "slice_count_requested",
+        "feature_dimension",
+    )
+    config: dict[str, object] = {}
+    for column in required:
+        if column not in rows:
+            raise AssertionError(f"explanation rows are missing {column}")
+        expected = str(provenance.get(column, "")).strip()
+        if not expected:
+            raise AssertionError(f"run manifest provenance is missing {column}")
+        actual = rows[column].dropna().astype(str).str.strip().unique().tolist()
+        if len(actual) != 1 or actual[0] != expected:
+            raise AssertionError(
+                f"explanation {column} does not match the sealed training run"
+            )
+        config[column] = (
+            int(expected)
+            if column in {"slice_count_requested", "feature_dimension"}
+            else expected
+        )
+    return config
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args()
@@ -93,14 +140,49 @@ def main() -> None:
         dtype={"patient_id": "string", "ct_id": "string"},
     )
     masks = masks.loc[masks["status"].isin(["passed", "warning"])]
+    required_mask_columns = {
+        "patient_id",
+        "ct_id",
+        "mask_path",
+        "mask_sha256",
+        "segmentation_signature",
+    }
+    missing_mask_columns = sorted(required_mask_columns - set(masks.columns))
+    if missing_mask_columns:
+        raise AssertionError(
+            f"segmentation index is missing provenance columns: {missing_mask_columns}"
+        )
     embeddings = embeddings.loc[embeddings["status"].eq("ok")]
+    embedding_columns = [
+        "patient_id",
+        "ct_id",
+        "embedding_path",
+        "embedding_sha256",
+        "series_sha256",
+        "mask_sha256",
+        "model_id",
+        "model_revision",
+        "input_mode",
+        "window_mode",
+        "slice_count_requested",
+        "feature_dimension",
+        "preprocessing_signature",
+    ]
     data = cohort.merge(
-        masks[["patient_id", "ct_id", "mask_path"]],
+        masks[
+            [
+                "patient_id",
+                "ct_id",
+                "mask_path",
+                "mask_sha256",
+                "segmentation_signature",
+            ]
+        ].rename(columns={"mask_sha256": "segmentation_mask_sha256"}),
         on=["patient_id", "ct_id"],
         how="inner",
         validate="one_to_one",
     ).merge(
-        embeddings[["patient_id", "ct_id", "embedding_path"]],
+        embeddings[embedding_columns],
         on=["patient_id", "ct_id"],
         how="inner",
         validate="one_to_one",
@@ -112,25 +194,54 @@ def main() -> None:
     if not args.allow_temporal_test and selected["evaluation_group"].eq("temporal_test").any():
         raise ValueError("temporal-test visualization requires explicit --allow-temporal-test")
 
+    run_manifest_path = args.result_dir / "run_manifest.json"
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    binding = validate_explanation_binding(
+        run_manifest,
+        args.embedding_index,
+        args.result_dir,
+        selected,
+    )
+
     prompt_config = json.loads(args.prompt_config.read_text(encoding="utf-8"))
     positive_prompts = list(prompt_config["positive"])
     prompts = positive_prompts + list(prompt_config["negative"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if device.type == "cuda" else torch.float32
     model = AutoModel.from_pretrained(
-        args.model_id,
+        str(binding["model_id"]),
+        revision=str(binding["model_revision"]),
         dtype=dtype,
         cache_dir=str(args.cache_dir),
     ).to(device)
     model.eval()
-    processor = AutoProcessor.from_pretrained(args.model_id, cache_dir=str(args.cache_dir))
+    if resolve_model_revision(model) != str(binding["model_revision"]):
+        raise AssertionError("loaded explanation model revision differs from training provenance")
+    processor = AutoProcessor.from_pretrained(
+        str(binding["model_id"]),
+        revision=str(binding["model_revision"]),
+        cache_dir=str(args.cache_dir),
+    )
     classifier = joblib.load(args.result_dir / "linear_probe.joblib")
+    classifier_dimension = int(getattr(classifier, "n_features_in_", -1))
+    if classifier_dimension != int(binding["feature_dimension"]):
+        raise AssertionError("classifier feature dimension differs from embedding provenance")
 
     completed: list[str] = []
     for row in selected.itertuples(index=False):
         ct_path = Path(row.series_path)
         mask_path = Path(row.mask_path)
         embedding_path = Path(row.embedding_path)
+        if sha256_file(ct_path) != str(row.series_sha256):
+            raise AssertionError("current CT differs from the sealed explanation embedding")
+        if sha256_file(embedding_path) != str(row.embedding_sha256):
+            raise AssertionError("embedding archive differs from the sealed training input")
+        current_mask_sha = sha256_file(mask_path)
+        if current_mask_sha != str(row.segmentation_mask_sha256):
+            raise AssertionError("lung mask differs from the segmentation index")
+        if str(binding["input_mode"]) == "lung-masked":
+            if current_mask_sha != str(row.mask_sha256):
+                raise AssertionError("lung mask differs from the sealed explanation embedding")
         ct_image = nib.load(str(ct_path))
         mask_image = nib.load(str(mask_path))
         if tuple(ct_image.shape) != tuple(mask_image.shape) or not np.allclose(
@@ -142,14 +253,32 @@ def main() -> None:
             raise ValueError("CT/mask geometry mismatch during explanation")
         ct_volume = ct_image.get_fdata(dtype=np.float32, caching="unchanged")
         mask_volume = mask_image.get_fdata(dtype=np.float32, caching="unchanged").astype(np.uint8)
-        images, computed_indices = load_ct_slices(ct_path, args.slices, "lung")
+        if str(binding["input_mode"]) == "lung-masked":
+            images, computed_indices = load_masked_ct_slices(
+                ct_path,
+                mask_path,
+                int(binding["slice_count_requested"]),
+                str(binding["window_mode"]),
+            )
+            x0, x1, y0, y1 = lung_crop_bounds(mask_volume > 0)
+        else:
+            images, computed_indices = load_ct_slices(
+                ct_path,
+                int(binding["slice_count_requested"]),
+                str(binding["window_mode"]),
+            )
+            x0, x1, y0, y1 = 0, int(mask_volume.shape[0]), 0, int(mask_volume.shape[1])
         with np.load(embedding_path) as stored:
             baseline_embeddings = stored["slice_embeddings"].astype(np.float32)
+            stored_pooled = stored["pooled_embedding"].astype(np.float32)
             stored_indices = stored["slice_indices"].astype(int)
         if not np.array_equal(computed_indices, stored_indices):
             raise AssertionError("stored slice indices differ from current preprocessing")
+        recomputed_pooled = pool_slice_embeddings(baseline_embeddings)
+        if not np.allclose(recomputed_pooled, stored_pooled, atol=1e-5, rtol=1e-5):
+            raise AssertionError("stored slice embeddings do not reproduce pooled embedding")
         baseline_probability = float(
-            classifier.predict_proba(pool_slice_embeddings(baseline_embeddings)[None, :])[0, 1]
+            classifier.predict_proba(stored_pooled[None, :])[0, 1]
         )
 
         replacements: dict[tuple[int, int, int], np.ndarray] = {}
@@ -157,7 +286,7 @@ def main() -> None:
         for position, (image, z_index) in enumerate(zip(images, stored_indices)):
             tiles, tile_bounds = build_occluded_tiles(
                 np.asarray(image),
-                mask_volume[:, :, int(z_index)] > 0,
+                mask_volume[x0:x1, y0:y1, int(z_index)] > 0,
                 position,
                 args.grid_size,
             )
@@ -186,7 +315,10 @@ def main() -> None:
                 if key[0] != position:
                     continue
                 row_start, row_end, column_start, column_end = bounds[key]
-                attention_slice[row_start:row_end, column_start:column_end] = float(value)
+                attention_slice[
+                    x0 + row_start : x0 + row_end,
+                    y0 + column_start : y0 + column_end,
+                ] = float(value)
             attention_slice[mask_volume[:, :, int(z_index)] == 0] = 0.0
             slice_maps[int(z_index)] = attention_slice
         attention_volume = interpolate_attention_volume(slice_maps, int(ct_volume.shape[2]))
@@ -218,6 +350,14 @@ def main() -> None:
                 "grid_size": int(args.grid_size),
                 "sampled_slice_indices": [int(value) for value in stored_indices],
                 "attention_nifti": "model_attention_signed.nii.gz",
+                "run_manifest_sha256": sha256_file(run_manifest_path),
+                "classifier_sha256": run_manifest["artifacts"]["image_model_sha256"],
+                "model_id": binding["model_id"],
+                "model_revision": binding["model_revision"],
+                "input_mode": binding["input_mode"],
+                "window_mode": binding["window_mode"],
+                "lung_mask_sha256": current_mask_sha,
+                "segmentation_signature": str(row.segmentation_signature),
             }
         )
         (case_dir / "explanation.json").write_text(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from importlib.metadata import version
 from pathlib import Path
@@ -19,12 +20,45 @@ from .lung_segmentation import compute_mask_qc, validate_mask_geometry
 from .visualization import render_segmentation_montage
 
 
-def segment_one(input_path: Path, output_path: Path, inferer: object) -> dict[str, Any]:
+def resolve_verified_source_sha(
+    source_path: Path,
+    audited_sha256: object | None,
+) -> str:
+    current = sha256_file(source_path)
+    if audited_sha256 is None:
+        return current
+    audited = str(audited_sha256).strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", audited):
+        raise AssertionError("audited CT fingerprint is missing or invalid")
+    if current != audited.lower():
+        raise AssertionError("current CT differs from audited fingerprint")
+    return current
+
+
+def expected_labels_for_model(modelname: str) -> set[int] | None:
+    if modelname == "R231":
+        return {1, 2}
+    if modelname in {"LTRCLobes", "LTRCLobes_R231"}:
+        return {1, 2, 3, 4, 5}
+    return None
+
+
+def segment_one(
+    input_path: Path,
+    output_path: Path,
+    inferer: object,
+    *,
+    expected_labels: set[int] | None = None,
+) -> dict[str, Any]:
     image = sitk.ReadImage(str(input_path))
     ct_array = sitk.GetArrayFromImage(image)
     mask = np.asarray(inferer.apply(image), dtype=np.uint8)
     validate_mask_geometry(tuple(ct_array.shape), tuple(mask.shape))
-    qc = compute_mask_qc(mask, tuple(float(value) for value in image.GetSpacing()))
+    qc = compute_mask_qc(
+        mask,
+        tuple(float(value) for value in image.GetSpacing()),
+        expected_labels=expected_labels,
+    )
 
     mask_image = sitk.GetImageFromArray(mask)
     mask_image.CopyInformation(image)
@@ -33,6 +67,32 @@ def segment_one(input_path: Path, output_path: Path, inferer: object) -> dict[st
     sitk.WriteImage(mask_image, str(temporary_path), useCompression=True)
     os.replace(temporary_path, output_path)
     return qc
+
+
+def evaluate_saved_mask(
+    input_path: Path,
+    mask_path: Path,
+    *,
+    expected_labels: set[int] | None,
+) -> dict[str, Any]:
+    image = sitk.ReadImage(str(input_path))
+    mask_image = sitk.ReadImage(str(mask_path))
+    mask = sitk.GetArrayFromImage(mask_image).astype(np.uint8, copy=False)
+    validate_mask_geometry(
+        tuple(reversed(image.GetSize())),
+        tuple(mask.shape),
+    )
+    if (
+        image.GetSpacing() != mask_image.GetSpacing()
+        or image.GetOrigin() != mask_image.GetOrigin()
+        or image.GetDirection() != mask_image.GetDirection()
+    ):
+        raise ValueError("CT/mask physical geometry mismatch")
+    return compute_mask_qc(
+        mask,
+        tuple(float(value) for value in image.GetSpacing()),
+        expected_labels=expected_labels,
+    )
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -164,9 +224,10 @@ def main() -> None:
     for row in tqdm(cohort.itertuples(index=False), total=len(cohort), desc="Lung segmentation"):
         ct_id = str(row.ct_id)
         source_path = Path(row.series_path)
-        source_sha = str(getattr(row, "series_sha256", "") or "")
-        if not source_sha:
-            source_sha = sha256_file(source_path)
+        source_sha = resolve_verified_source_sha(
+            source_path,
+            getattr(row, "series_sha256", None),
+        )
         mask_path = args.output_dir / "masks" / f"{ct_id}.nii.gz"
         qc_path = args.output_dir / "qc" / f"{ct_id}.json"
         preview_path = args.output_dir / "previews" / f"{ct_id}.png"
@@ -180,7 +241,48 @@ def main() -> None:
             and str(previous.get("status", "")) in {"passed", "warning"}
         )
         if reusable:
-            continue
+            saved_qc = json.loads(qc_path.read_text(encoding="utf-8"))
+            current_mask_sha = sha256_file(mask_path)
+            previous_mask_sha = str(previous.get("mask_sha256", ""))
+            previous_mask_hash_valid = bool(
+                re.fullmatch(r"[0-9a-fA-F]{64}", previous_mask_sha)
+            )
+            if previous_mask_hash_valid and current_mask_sha != previous_mask_sha.lower():
+                reusable = False
+            elif (
+                int(saved_qc.get("qc_schema_version", 0)) != 2
+                or not previous_mask_hash_valid
+                or str(saved_qc.get("mask_sha256", "")) != current_mask_sha
+            ):
+                qc = evaluate_saved_mask(
+                    source_path,
+                    mask_path,
+                    expected_labels=expected_labels_for_model(args.modelname),
+                )
+                qc_payload = {
+                    **qc,
+                    "source_sha256": source_sha,
+                    "mask_sha256": current_mask_sha,
+                    "segmentation_signature": signature,
+                }
+                if "preview_slice_indices" in saved_qc:
+                    qc_payload["preview_slice_indices"] = saved_qc[
+                        "preview_slice_indices"
+                    ]
+                _write_json_atomic(qc_path, qc_payload)
+                for record in output_records:
+                    if str(record.get("ct_id")) == ct_id:
+                        record["status"] = str(qc["status"])
+                        record["volume_ml"] = float(qc["volume_ml"])
+                        record["mask_sha256"] = current_mask_sha
+                        break
+                pd.DataFrame.from_records(output_records).to_csv(
+                    index_path,
+                    index=False,
+                    encoding="utf-8-sig",
+                )
+            if reusable:
+                continue
         output_records = [record for record in output_records if str(record.get("ct_id")) != ct_id]
         try:
             if inferer is None:
@@ -190,10 +292,17 @@ def main() -> None:
                     args.force_cpu,
                     args.batch_size,
                 )
-            qc = segment_one(source_path, mask_path, inferer)
+            qc = segment_one(
+                source_path,
+                mask_path,
+                inferer,
+                expected_labels=expected_labels_for_model(args.modelname),
+            )
+            mask_sha = sha256_file(mask_path)
             qc_payload = {
                 **qc,
                 "source_sha256": source_sha,
+                "mask_sha256": mask_sha,
                 "segmentation_signature": signature,
             }
             if args.write_previews and qc["status"] != "failed":
@@ -211,6 +320,7 @@ def main() -> None:
                 "qc_path": str(qc_path.resolve()),
                 "preview_path": str(preview_path.resolve()) if args.write_previews else "",
                 "source_sha256": source_sha,
+                "mask_sha256": mask_sha,
                 "segmentation_signature": signature,
                 "status": str(qc["status"]),
                 "volume_ml": float(qc["volume_ml"]),
@@ -224,8 +334,10 @@ def main() -> None:
                 "qc_path": "",
                 "preview_path": "",
                 "source_sha256": source_sha,
+                "mask_sha256": "",
                 "segmentation_signature": signature,
                 "status": f"error:{type(exc).__name__}",
+                "error_message": str(exc),
                 "volume_ml": np.nan,
             }
         output_records.append(record)
@@ -236,7 +348,11 @@ def main() -> None:
             encoding="utf-8-sig",
         )
 
+    requested_ct_ids = set(cohort["ct_id"].astype(str))
     result_frame = pd.DataFrame.from_records(output_records)
+    result_frame = result_frame.loc[
+        result_frame["ct_id"].astype(str).isin(requested_ct_ids)
+    ]
     summary = {
         "requested_patients": int(len(cohort)),
         "status_counts": {
@@ -246,6 +362,39 @@ def main() -> None:
         "segmentation_signature": signature,
         "index_path": str(index_path.resolve()),
     }
+    import torch
+
+    resolved_modelname, resolved_fillmodel = resolve_model_selection(
+        args.modelname,
+        args.fillmodel,
+    )
+    runtime_device = "cpu"
+    gpu_name = ""
+    if not args.force_cpu and torch.cuda.is_available():
+        runtime_device = "cuda"
+        gpu_name = str(torch.cuda.get_device_name(0))
+    run_manifest = {
+        "schema_version": 1,
+        "cohort_sha256": sha256_file(args.cohort),
+        "fingerprints_sha256": (
+            sha256_file(fingerprint_path) if fingerprint_path.is_file() else ""
+        ),
+        "segmentation_index_sha256": sha256_file(index_path),
+        "segmentation_signature": signature,
+        "modelname": resolved_modelname,
+        "fillmodel": resolved_fillmodel,
+        "qc_schema_version": 2,
+        "requested_patients": int(len(cohort)),
+        "status_counts": summary["status_counts"],
+        "runtime": {
+            "device": runtime_device,
+            "gpu_name": gpu_name,
+            "lungmask": version("lungmask"),
+            "SimpleITK": version("SimpleITK"),
+            "torch": version("torch"),
+        },
+    }
+    _write_json_atomic(args.output_dir / "run_manifest.json", run_manifest)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
