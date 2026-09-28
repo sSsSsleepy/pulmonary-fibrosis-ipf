@@ -125,7 +125,11 @@ def main() -> None:
     ).to(device)
     model.eval()
     model_revision = resolve_model_revision(model)
-    processor = AutoProcessor.from_pretrained(args.model_id, cache_dir=str(args.cache_dir))
+    processor = AutoProcessor.from_pretrained(
+        args.model_id,
+        revision=model_revision,
+        cache_dir=str(args.cache_dir),
+    )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     index_path = args.output_dir / "embedding_index.csv"

@@ -44,6 +44,20 @@ class AttentionTests(unittest.TestCase):
 
         np.testing.assert_array_equal(pooled, np.asarray([2.0, 3.0, 3.0, 4.0]))
 
+    def test_tri_window_occlusion_uses_air_rgb_triplet(self) -> None:
+        image = np.full((2, 2, 3), 100, dtype=np.uint8)
+        mask = np.ones((2, 2), dtype=bool)
+
+        tiles, _ = build_occluded_tiles(
+            image,
+            mask,
+            slice_position=0,
+            grid_size=1,
+            fill_value=(55, 0, 0),
+        )
+
+        np.testing.assert_array_equal(tiles[(0, 0, 0)][0, 0], [55, 0, 0])
+
     def test_occlusion_delta_replaces_only_target_slice(self) -> None:
         baseline = np.asarray([[2.0, 2.0], [2.0, 2.0]])
         replacements = {(0, 1, 2): np.asarray([0.0, 0.0])}

@@ -74,6 +74,48 @@ def ensure_temporal_output_is_unlocked(
         )
 
 
+def begin_temporal_evaluation(
+    output_dir: Path,
+    *,
+    temporal_membership_sha256: str,
+    allow_overwrite: bool,
+    overwrite_reason: str,
+) -> int:
+    lock_path = output_dir / "temporal_evaluation.lock.json"
+    previous: dict[str, Any] = {}
+    if lock_path.exists():
+        previous = json.loads(lock_path.read_text(encoding="utf-8"))
+        if not allow_overwrite:
+            raise FileExistsError(
+                "temporal evaluation is already started or complete in this output directory"
+            )
+        if not overwrite_reason.strip():
+            raise ValueError("an explicit temporal overwrite reason is required")
+        previous_membership = str(previous.get("temporal_membership_sha256", ""))
+        if previous_membership and previous_membership != temporal_membership_sha256:
+            raise AssertionError(
+                "temporal membership changed; use a new output directory instead of overwriting"
+            )
+    evaluation_count = int(
+        previous.get("evaluation_count", previous.get("evaluations", 0))
+    ) + 1
+    history = list(previous.get("overwrite_history", []))
+    if previous:
+        history.append(str(overwrite_reason).strip())
+    _write_json_atomic(
+        lock_path,
+        {
+            "schema_version": 2,
+            "status": "started",
+            "temporal_membership_sha256": temporal_membership_sha256,
+            "evaluation_count": evaluation_count,
+            "evaluations": evaluation_count,
+            "overwrite_history": history,
+        },
+    )
+    return evaluation_count
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(path.suffix + ".tmp")
@@ -91,8 +133,6 @@ def metadata_feature_columns() -> list[str]:
         "manufacturer",
         "scanner_model",
         "kernel",
-        "series_description",
-        "study_description",
     ]
 
 
@@ -416,6 +456,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260928)
     parser.add_argument("--skip-expected-count-check", action="store_true")
     parser.add_argument("--allow-temporal-overwrite", action="store_true")
+    parser.add_argument("--temporal-overwrite-reason", default="")
     return parser.parse_args()
 
 
@@ -426,6 +467,8 @@ def main() -> None:
         args.output_dir,
         allow_overwrite=args.allow_temporal_overwrite,
     )
+    if args.allow_temporal_overwrite and not args.temporal_overwrite_reason.strip():
+        raise ValueError("an explicit temporal overwrite reason is required")
     cohort = pd.read_csv(args.cohort, dtype={"patient_id": "string", "ct_id": "string"})
     index = pd.read_csv(
         args.embedding_index,
@@ -481,7 +524,8 @@ def main() -> None:
         raise AssertionError(
             f"corrected training counts differ from locked design: {count_summary}"
         )
-
+    development_membership = membership_sha256(data.loc[development_mask])
+    temporal_membership = membership_sha256(data.loc[temporal_mask])
     features = load_embeddings(data)
     image_nested = select_model_nested_cv(
         features[development_mask],
@@ -505,6 +549,12 @@ def main() -> None:
     )
     image_probability = image_model.predict_proba(features)[:, 1]
     metadata_probability = metadata_model.predict_proba(prepare_metadata(data))[:, 1]
+    temporal_evaluation_count = begin_temporal_evaluation(
+        args.output_dir,
+        temporal_membership_sha256=temporal_membership,
+        allow_overwrite=args.allow_temporal_overwrite,
+        overwrite_reason=args.temporal_overwrite_reason,
+    )
     temporal_labels = labels[temporal_mask]
     temporal_image = image_probability[temporal_mask]
     temporal_metadata = metadata_probability[temporal_mask]
@@ -544,7 +594,7 @@ def main() -> None:
         "metadata_nested_development": metadata_nested,
         "metadata_final_selection": metadata_selection,
         "temporal_test": {
-            "evaluations": 1,
+            "evaluations": temporal_evaluation_count,
             "image": temporal_image_metrics,
             "metadata": temporal_metadata_metrics,
             "image_auc_ci95": bootstrap_auc_ci(
@@ -609,10 +659,8 @@ def main() -> None:
         "data": count_summary,
         "seed": int(args.seed),
         "provenance": provenance,
-        "development_membership_sha256": membership_sha256(
-            data.loc[development_mask]
-        ),
-        "temporal_membership_sha256": membership_sha256(data.loc[temporal_mask]),
+        "development_membership_sha256": development_membership,
+        "temporal_membership_sha256": temporal_membership,
         "inputs": {
             "cohort_sha256": sha256_file(args.cohort),
             "fingerprints_sha256": sha256_file(fingerprint_path),
@@ -625,17 +673,22 @@ def main() -> None:
             "metrics_sha256": sha256_file(metrics_path),
             "report_sha256": sha256_file(report_path),
         },
-        "temporal_test_evaluations": 1,
+        "temporal_test_evaluations": temporal_evaluation_count,
     }
     manifest_path = args.output_dir / "run_manifest.json"
     _write_json_atomic(manifest_path, manifest)
     lock = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "status": "complete",
         "temporal_membership_sha256": manifest["temporal_membership_sha256"],
         "run_manifest_sha256": sha256_file(manifest_path),
         "metrics_sha256": manifest["artifacts"]["metrics_sha256"],
         "predictions_sha256": manifest["artifacts"]["predictions_sha256"],
-        "evaluations": 1,
+        "evaluation_count": temporal_evaluation_count,
+        "evaluations": temporal_evaluation_count,
+        "overwrite_history": json.loads(
+            (args.output_dir / "temporal_evaluation.lock.json").read_text(encoding="utf-8")
+        ).get("overwrite_history", []),
     }
     _write_json_atomic(args.output_dir / "temporal_evaluation.lock.json", lock)
     print(json.dumps(metrics, ensure_ascii=False, indent=2))

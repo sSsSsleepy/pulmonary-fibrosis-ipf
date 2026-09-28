@@ -10,7 +10,7 @@ def build_occluded_tiles(
     lung_mask: np.ndarray,
     slice_position: int,
     grid_size: int = 12,
-    fill_value: int = 55,
+    fill_value: int | tuple[int, int, int] = 55,
 ) -> tuple[dict[tuple[int, int, int], np.ndarray], dict[tuple[int, int, int], tuple[int, int, int, int]]]:
     pixels = np.asarray(image)
     mask = np.asarray(lung_mask, dtype=bool)
@@ -18,6 +18,9 @@ def build_occluded_tiles(
         raise ValueError("RGB image and lung mask must share a 2D shape")
     if grid_size <= 0:
         raise ValueError("grid_size must be positive")
+    fill = np.asarray(fill_value, dtype=np.uint8)
+    if fill.ndim > 1 or (fill.ndim == 1 and fill.shape != (3,)):
+        raise ValueError("fill_value must be a scalar or RGB triplet")
     row_edges = np.rint(np.linspace(0, pixels.shape[0], grid_size + 1)).astype(int)
     column_edges = np.rint(np.linspace(0, pixels.shape[1], grid_size + 1)).astype(int)
     tiles: dict[tuple[int, int, int], np.ndarray] = {}
@@ -30,7 +33,7 @@ def build_occluded_tiles(
                 continue
             key = (int(slice_position), row, column)
             occluded = pixels.copy()
-            occluded[row_start:row_end, column_start:column_end] = np.uint8(fill_value)
+            occluded[row_start:row_end, column_start:column_end] = fill
             tiles[key] = occluded
             bounds[key] = (row_start, row_end, column_start, column_end)
     return tiles, bounds

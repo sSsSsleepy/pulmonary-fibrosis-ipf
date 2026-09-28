@@ -13,6 +13,7 @@ import torch
 from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
+from .audit_corrected_probe import validate_run_seal
 from .attention import (
     build_occluded_tiles,
     interpolate_attention_volume,
@@ -129,6 +130,26 @@ def validate_explanation_binding(
     return config
 
 
+def validate_segmentation_seal(
+    mask_index_path: Path,
+    rows: pd.DataFrame,
+) -> dict[str, object]:
+    manifest_path = mask_index_path.parent / "run_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError("segmentation run manifest is missing")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if sha256_file(mask_index_path) != str(
+        manifest.get("segmentation_index_sha256", "")
+    ):
+        raise AssertionError("segmentation index differs from its sealed run manifest")
+    if int(manifest.get("qc_schema_version", 0)) != 2:
+        raise AssertionError("segmentation run does not use the required QC schema")
+    signatures = rows["segmentation_signature"].dropna().astype(str).unique().tolist()
+    if signatures != [str(manifest.get("segmentation_signature", ""))]:
+        raise AssertionError("segmentation signatures differ from the sealed run manifest")
+    return manifest
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args()
@@ -139,6 +160,7 @@ def main() -> None:
         args.embedding_index,
         dtype={"patient_id": "string", "ct_id": "string"},
     )
+    segmentation_manifest = validate_segmentation_seal(args.mask_index, masks)
     masks = masks.loc[masks["status"].isin(["passed", "warning"])]
     required_mask_columns = {
         "patient_id",
@@ -195,6 +217,11 @@ def main() -> None:
         raise ValueError("temporal-test visualization requires explicit --allow-temporal-test")
 
     run_manifest_path = args.result_dir / "run_manifest.json"
+    training_predictions = pd.read_csv(
+        args.result_dir / "predictions.csv",
+        dtype={"patient_id": "string", "ct_id": "string"},
+    )
+    validate_run_seal(args.result_dir, training_predictions)
     run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
     binding = validate_explanation_binding(
         run_manifest,
@@ -284,11 +311,15 @@ def main() -> None:
         replacements: dict[tuple[int, int, int], np.ndarray] = {}
         bounds: dict[tuple[int, int, int], tuple[int, int, int, int]] = {}
         for position, (image, z_index) in enumerate(zip(images, stored_indices)):
+            occlusion_fill: int | tuple[int, int, int] = (
+                (55, 0, 0) if str(binding["window_mode"]) == "tri" else 55
+            )
             tiles, tile_bounds = build_occluded_tiles(
                 np.asarray(image),
                 mask_volume[x0:x1, y0:y1, int(z_index)] > 0,
                 position,
                 args.grid_size,
+                occlusion_fill,
             )
             if not tiles:
                 continue
@@ -358,6 +389,12 @@ def main() -> None:
                 "window_mode": binding["window_mode"],
                 "lung_mask_sha256": current_mask_sha,
                 "segmentation_signature": str(row.segmentation_signature),
+                "segmentation_run_manifest_sha256": sha256_file(
+                    args.mask_index.parent / "run_manifest.json"
+                ),
+                "segmentation_qc_schema_version": segmentation_manifest[
+                    "qc_schema_version"
+                ],
             }
         )
         (case_dir / "explanation.json").write_text(

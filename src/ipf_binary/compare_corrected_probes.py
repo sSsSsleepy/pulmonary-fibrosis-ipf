@@ -16,6 +16,44 @@ from .leakage import sha256_file
 KEY_COLUMNS = ["patient_id", "ct_id"]
 
 
+def validate_comparison_manifests(
+    baseline: dict[str, Any],
+    masked: dict[str, Any],
+) -> dict[str, Any]:
+    baseline_provenance = baseline.get("provenance", {})
+    masked_provenance = masked.get("provenance", {})
+    if baseline_provenance.get("input_mode") != "full":
+        raise AssertionError("baseline run must use full input mode")
+    if masked_provenance.get("input_mode") != "lung-masked":
+        raise AssertionError("masked run must use lung-masked input mode")
+    shared_provenance = (
+        "model_id",
+        "model_revision",
+        "window_mode",
+        "slice_count_requested",
+        "feature_dimension",
+    )
+    verified: dict[str, Any] = {
+        "baseline_input_mode": "full",
+        "masked_input_mode": "lung-masked",
+    }
+    for field in shared_provenance:
+        baseline_value = str(baseline_provenance.get(field, ""))
+        masked_value = str(masked_provenance.get(field, ""))
+        if not baseline_value or baseline_value != masked_value:
+            raise AssertionError(f"comparison runs differ in {field}")
+        verified[field] = baseline_value
+    for field in (
+        "seed",
+        "development_membership_sha256",
+        "temporal_membership_sha256",
+    ):
+        if str(baseline.get(field, "")) != str(masked.get(field, "")):
+            raise AssertionError(f"comparison runs differ in {field}")
+        verified[field] = baseline[field]
+    return verified
+
+
 def compare_prediction_frames(
     baseline: pd.DataFrame,
     masked: pd.DataFrame,
@@ -114,6 +152,10 @@ def main() -> None:
     )
     baseline_manifest, _ = validate_run_seal(args.baseline_dir, baseline)
     masked_manifest, _ = validate_run_seal(args.masked_dir, masked)
+    verified_conditions = validate_comparison_manifests(
+        baseline_manifest,
+        masked_manifest,
+    )
     paired, summary = compare_prediction_frames(
         baseline,
         masked,
@@ -126,6 +168,7 @@ def main() -> None:
         "baseline_predictions_sha256": baseline_manifest["artifacts"]["predictions_sha256"],
         "masked_predictions_sha256": masked_manifest["artifacts"]["predictions_sha256"],
     }
+    summary["verified_conditions"] = verified_conditions
     args.output_dir.mkdir(parents=True, exist_ok=True)
     paired.to_csv(
         args.output_dir / "paired_temporal_predictions.csv",

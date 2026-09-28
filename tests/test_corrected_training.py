@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from ipf_binary.train_corrected_probe import (
+    begin_temporal_evaluation,
     fit_final_metadata_probe,
     ensure_temporal_output_is_unlocked,
     membership_sha256,
@@ -39,8 +40,6 @@ class CorrectedTrainingTests(unittest.TestCase):
                 "manufacturer",
                 "scanner_model",
                 "kernel",
-                "series_description",
-                "study_description",
             ],
         )
 
@@ -125,11 +124,30 @@ class CorrectedTrainingTests(unittest.TestCase):
     def test_temporal_lock_requires_explicit_overwrite(self) -> None:
         with TemporaryDirectory() as directory:
             result_dir = Path(directory)
-            (result_dir / "temporal_evaluation.lock.json").write_text("{}", encoding="utf-8")
+            count = begin_temporal_evaluation(
+                result_dir,
+                temporal_membership_sha256="a" * 64,
+                allow_overwrite=False,
+                overwrite_reason="",
+            )
+            self.assertEqual(count, 1)
 
             with self.assertRaisesRegex(FileExistsError, "temporal"):
                 ensure_temporal_output_is_unlocked(result_dir, allow_overwrite=False)
-            ensure_temporal_output_is_unlocked(result_dir, allow_overwrite=True)
+            with self.assertRaisesRegex(ValueError, "reason"):
+                begin_temporal_evaluation(
+                    result_dir,
+                    temporal_membership_sha256="a" * 64,
+                    allow_overwrite=True,
+                    overwrite_reason="",
+                )
+            count = begin_temporal_evaluation(
+                result_dir,
+                temporal_membership_sha256="a" * 64,
+                allow_overwrite=True,
+                overwrite_reason="documented provenance repair",
+            )
+            self.assertEqual(count, 2)
 
     def test_membership_hash_is_order_independent(self) -> None:
         frame = pd.DataFrame(

@@ -297,7 +297,7 @@ def test_validate_evaluation_groups_rejects_duplicate_patient(self) -> None:
 def test_metadata_feature_columns_exclude_diagnosis_text(self) -> None:
     self.assertEqual(metadata_feature_columns(),
                      ["scan_year", "slice_thickness_mm", "manufacturer",
-                      "scanner_model", "kernel", "series_description", "study_description"])
+                      "scanner_model", "kernel"])
 ```
 
 - [ ] **Step 2: Run the tests and verify RED**

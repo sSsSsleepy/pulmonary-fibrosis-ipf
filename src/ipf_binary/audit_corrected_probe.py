@@ -57,7 +57,9 @@ def validate_run_seal(
         raise AssertionError("temporal membership differs from the sealed run")
     if int(manifest.get("temporal_test_evaluations", 0)) != 1:
         raise AssertionError("run manifest does not record exactly one temporal evaluation")
-    if int(lock.get("evaluations", 0)) != 1:
+    if str(lock.get("status", "")) != "complete":
+        raise AssertionError("temporal evaluation lock is not complete")
+    if int(lock.get("evaluation_count", lock.get("evaluations", 0))) != 1:
         raise AssertionError("temporal lock does not record exactly one evaluation")
     if sha256_file(manifest_path) != str(lock.get("run_manifest_sha256", "")):
         raise AssertionError("run manifest differs from the temporal lock")

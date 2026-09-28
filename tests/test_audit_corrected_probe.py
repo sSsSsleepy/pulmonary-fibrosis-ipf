@@ -43,11 +43,13 @@ class AuditCorrectedProbeTests(unittest.TestCase):
             manifest_path = root / "run_manifest.json"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             lock = {
+                "status": "complete",
                 "run_manifest_sha256": sha256_file(manifest_path),
                 "temporal_membership_sha256": manifest["temporal_membership_sha256"],
                 "metrics_sha256": manifest["artifacts"]["metrics_sha256"],
                 "predictions_sha256": manifest["artifacts"]["predictions_sha256"],
                 "evaluations": 1,
+                "evaluation_count": 1,
             }
             (root / "temporal_evaluation.lock.json").write_text(
                 json.dumps(lock), encoding="utf-8"

@@ -69,7 +69,7 @@ $CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
   --result-dir artifacts/results/medsiglip_corrected_temporal_sealed
 ```
 
-正式报告同时给出采集年份、扫描设备、层厚、重建核和序列描述构成的元数据对照模型，用于判断影像模型是否只学到了采集域差异。
+正式报告同时给出采集年份、扫描设备、层厚和重建核构成的元数据对照模型，用于判断影像模型是否只学到了采集域差异。自由文本的序列/检查描述不入模，避免诊断关键词或患者信息造成目标泄漏。
 
 ## 肺野/肺叶分割和可视化
 

@@ -4,7 +4,10 @@ import unittest
 
 import pandas as pd
 
-from ipf_binary.compare_corrected_probes import compare_prediction_frames
+from ipf_binary.compare_corrected_probes import (
+    compare_prediction_frames,
+    validate_comparison_manifests,
+)
 
 
 class CompareCorrectedProbesTests(unittest.TestCase):
@@ -47,6 +50,25 @@ class CompareCorrectedProbesTests(unittest.TestCase):
 
         with self.assertRaisesRegex(AssertionError, "membership"):
             compare_prediction_frames(baseline, masked, seed=42, iterations=20)
+
+    def test_manifest_comparison_rejects_two_full_input_runs(self) -> None:
+        baseline = {
+            "seed": 42,
+            "development_membership_sha256": "a" * 64,
+            "temporal_membership_sha256": "b" * 64,
+            "provenance": {
+                "input_mode": "full",
+                "model_id": "model",
+                "model_revision": "revision",
+                "window_mode": "lung",
+                "slice_count_requested": "16",
+                "feature_dimension": "2304",
+            },
+        }
+        masked = {**baseline, "provenance": dict(baseline["provenance"])}
+
+        with self.assertRaisesRegex(AssertionError, "lung-masked"):
+            validate_comparison_manifests(baseline, masked)
 
 
 if __name__ == "__main__":
