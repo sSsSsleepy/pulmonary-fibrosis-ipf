@@ -3,15 +3,61 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from .leakage import sha256_file
+
 
 KEY_COLUMNS = ["patient_id", "ct_id"]
 ELIGIBLE_STATUSES = {"passed", "warning"}
+FORMAL_EXPECTED_TRAINING_COUNTS = {
+    "patients": 650,
+    "label_0": 325,
+    "label_1": 325,
+    "development": 567,
+    "temporal_test": 83,
+    "temporal_label_0": 38,
+    "temporal_label_1": 45,
+}
+
+
+def validate_training_counts(
+    actual: dict[str, int],
+    expected: dict[str, int] = FORMAL_EXPECTED_TRAINING_COUNTS,
+) -> None:
+    if actual != expected:
+        raise AssertionError(
+            f"segmentation-QC counts differ from the locked formal design: {actual}"
+        )
+
+
+def validate_segmentation_run_manifest(
+    manifest_path: Path,
+    cohort_path: Path,
+    fingerprints_path: Path,
+    segmentation_index_path: Path,
+) -> dict[str, Any]:
+    if not manifest_path.is_file():
+        raise FileNotFoundError("segmentation run manifest is missing")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if int(manifest.get("qc_schema_version", 0)) != 2:
+        raise AssertionError("segmentation QC schema is not the locked version")
+    if not str(manifest.get("segmentation_signature", "")).strip():
+        raise AssertionError("segmentation signature is missing from the sealed run")
+    expected = {
+        "cohort": (cohort_path, "cohort_sha256"),
+        "fingerprints": (fingerprints_path, "fingerprints_sha256"),
+        "segmentation index": (segmentation_index_path, "segmentation_index_sha256"),
+    }
+    for name, (path, field) in expected.items():
+        if sha256_file(path) != str(manifest.get(field, "")):
+            raise AssertionError(f"{name} differs from the sealed segmentation run")
+    return manifest
 
 
 def _assert_unique(frame: pd.DataFrame, name: str) -> None:
@@ -45,6 +91,8 @@ def build_segmentation_qc_cohort(
     cohort: pd.DataFrame,
     fingerprints: pd.DataFrame,
     segmentation_index: pd.DataFrame,
+    *,
+    verify_mask_files: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Apply one patient-level segmentation gate to both formal experiment arms."""
     for frame, name in (
@@ -56,8 +104,15 @@ def build_segmentation_qc_cohort(
     for column in ("label", "evaluation_group"):
         if column not in cohort:
             raise ValueError(f"cohort is missing required column: {column}")
-    if "status" not in segmentation_index:
-        raise ValueError("segmentation index is missing status")
+    missing_segmentation_columns = [
+        column
+        for column in ("status", "source_sha256")
+        if column not in segmentation_index
+    ]
+    if missing_segmentation_columns:
+        raise ValueError(
+            f"segmentation index is missing columns: {missing_segmentation_columns}"
+        )
 
     cohort_keys = cohort[KEY_COLUMNS].astype("string")
     fingerprint_keys = fingerprints[KEY_COLUMNS].astype("string")
@@ -67,6 +122,45 @@ def build_segmentation_qc_cohort(
         raise AssertionError("fingerprints do not exactly cover the corrected cohort")
     if set(map(tuple, segmentation_keys.to_numpy())) != cohort_key_set:
         raise AssertionError("segmentation index does not exactly cover the corrected cohort")
+
+    source_audit = fingerprints[KEY_COLUMNS + ["series_sha256"]].merge(
+        segmentation_index[KEY_COLUMNS + ["source_sha256"]],
+        on=KEY_COLUMNS,
+        how="inner",
+        validate="one_to_one",
+    )
+    valid_source_hashes = source_audit["source_sha256"].astype(str).map(
+        lambda value: bool(re.fullmatch(r"[0-9a-fA-F]{64}", value))
+    )
+    hashes_match = (
+        source_audit["series_sha256"]
+        .astype(str)
+        .str.lower()
+        .eq(source_audit["source_sha256"].astype(str).str.lower())
+    )
+    if not valid_source_hashes.all() or not hashes_match.all():
+        raise AssertionError("segmentation source fingerprints differ from cohort fingerprints")
+
+    if verify_mask_files:
+        missing_mask_columns = [
+            column
+            for column in ("mask_path", "mask_sha256")
+            if column not in segmentation_index
+        ]
+        if missing_mask_columns:
+            raise ValueError(
+                f"segmentation index is missing mask columns: {missing_mask_columns}"
+            )
+        eligible_masks = segmentation_index.loc[
+            segmentation_index["status"].isin(ELIGIBLE_STATUSES)
+        ]
+        for row in eligible_masks.itertuples(index=False):
+            mask_path = Path(str(row.mask_path))
+            expected_mask_sha = str(row.mask_sha256).lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_mask_sha):
+                raise AssertionError("eligible segmentation mask hash is missing or invalid")
+            if not mask_path.is_file() or sha256_file(mask_path) != expected_mask_sha:
+                raise AssertionError("eligible segmentation mask differs from its sealed hash")
 
     status = segmentation_index[KEY_COLUMNS + ["status"]].copy()
     status["segmentation_status"] = status.pop("status").astype(str)
@@ -152,24 +246,64 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args()
     dtype = {"patient_id": "string", "ct_id": "string"}
+    segmentation_run_manifest_path = args.segmentation_index.with_name("run_manifest.json")
+    segmentation_run_manifest = validate_segmentation_run_manifest(
+        segmentation_run_manifest_path,
+        args.cohort,
+        args.fingerprints,
+        args.segmentation_index,
+    )
     cohort = pd.read_csv(args.cohort, dtype=dtype)
     fingerprints = pd.read_csv(args.fingerprints, dtype=dtype)
     segmentation = pd.read_csv(args.segmentation_index, dtype=dtype)
+    if "segmentation_signature" not in segmentation:
+        raise ValueError("segmentation index is missing segmentation_signature")
+    signatures = set(segmentation["segmentation_signature"].dropna().astype(str))
+    if signatures != {str(segmentation_run_manifest["segmentation_signature"])}:
+        raise AssertionError("segmentation index signature differs from the sealed run")
     eligible, eligible_fingerprints, exclusions, audit = build_segmentation_qc_cohort(
         cohort,
         fingerprints,
         segmentation,
+        verify_mask_files=True,
     )
     if audit["source_patients"] != args.expected_source_patients:
         raise AssertionError("source patient count differs from the locked corrected cohort")
     if audit["eligible_patients"] != args.expected_eligible_patients:
         raise AssertionError("eligible patient count differs from the reviewed segmentation QC")
+    validate_training_counts(audit["training_expected_counts"])
 
-    _write_csv_atomic(eligible, args.output_dir / "cohort.csv")
-    _write_csv_atomic(eligible_fingerprints, args.output_dir / "fingerprints.csv")
-    _write_csv_atomic(exclusions, args.output_dir / "exclusions.csv")
-    _write_json_atomic(audit["training_expected_counts"], args.output_dir / "expected_counts.json")
-    _write_json_atomic(audit, args.output_dir / "audit.json")
+    audit["input_sha256"] = {
+        "cohort": sha256_file(args.cohort),
+        "fingerprints": sha256_file(args.fingerprints),
+        "segmentation_index": sha256_file(args.segmentation_index),
+        "segmentation_run_manifest": sha256_file(segmentation_run_manifest_path),
+    }
+    output_paths = {
+        "cohort": args.output_dir / "cohort.csv",
+        "fingerprints": args.output_dir / "fingerprints.csv",
+        "exclusions": args.output_dir / "exclusions.csv",
+        "expected_counts": args.output_dir / "expected_counts.json",
+        "audit": args.output_dir / "audit.json",
+    }
+    _write_csv_atomic(eligible, output_paths["cohort"])
+    _write_csv_atomic(eligible_fingerprints, output_paths["fingerprints"])
+    _write_csv_atomic(exclusions, output_paths["exclusions"])
+    _write_json_atomic(audit["training_expected_counts"], output_paths["expected_counts"])
+    _write_json_atomic(audit, output_paths["audit"])
+    run_manifest = {
+        "schema_version": 1,
+        "eligibility_policy": {
+            "eligible_statuses": sorted(ELIGIBLE_STATUSES),
+            "all_exclusions_must_be_development": True,
+            "formal_expected_training_counts": FORMAL_EXPECTED_TRAINING_COUNTS,
+        },
+        "input_sha256": audit["input_sha256"],
+        "output_sha256": {
+            name: sha256_file(path) for name, path in output_paths.items()
+        },
+    }
+    _write_json_atomic(run_manifest, args.output_dir / "run_manifest.json")
     print(json.dumps(audit, ensure_ascii=False, indent=2))
 
 
