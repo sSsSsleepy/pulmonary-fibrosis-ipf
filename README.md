@@ -112,7 +112,7 @@ $CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
 .\.venv\Scripts\python.exe -m ipf_binary.compare_corrected_probes
 
 # 只解释显式指定的开发队列 CT；不会自动挑选“漂亮”病例。
-.\.venv\Scripts\python.exe -m ipf_binary.explain_corrected_probe --ct-id CT00000000
+.\.venv\Scripts\python.exe -m ipf_binary.explain_corrected_probe --ct-id CT_EXAMPLE
 ```
 
 `segment_lungs` 生成的是肺部解剖掩膜。`explain_corrected_probe` 只接受与密封训练清单、分类器哈希、MedSigLIP commit、输入模式和切片参数完全一致的特征，生成的是局部遮挡后分类概率变化热图，并固定标注为 **model attention, not fibrosis segmentation**；在没有医生像素级标注和独立分割评估前，不得把该热图称为纤维化病灶分割。

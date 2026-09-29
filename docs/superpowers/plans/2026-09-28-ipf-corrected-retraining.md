@@ -353,19 +353,19 @@ Run `ipf_binary.build_corrected_cohort` with the corrected workbook path, old ma
 
 Run `ipf_binary.audit_corrected_cohort`. Abort on any cross-patient identifier duplicate, missing source file, empty hash, or development/test overlap.
 
-- [ ] **Step 3: Extract provenance-aware MedSigLIP embeddings for the common segmentation-QC-eligible cohort**
+- [x] **Step 3: Extract provenance-aware MedSigLIP embeddings for the common segmentation-QC-eligible cohort**
 
 Run `ipf_binary.segmentation_qc_cohort`, then run `ipf_binary.extract_medsiglip_embeddings` with 16 lung-window slices and its common eligible manifest. Existing embeddings may be reused only when the stored SHA-256, model ID, and preprocessing signature match exactly.
 
-- [ ] **Step 4: Train using development rows and evaluate the locked temporal test once**
+- [x] **Step 4: Train using development rows and evaluate the locked temporal test once**
 
 Run `ipf_binary.train_corrected_probe` and retain stdout. Confirm the metrics file reports nested-CV fold distributions and exactly one temporal-test evaluation.
 
-- [ ] **Step 5: Audit saved results and scan Git tracking**
+- [x] **Step 5: Audit saved results and scan Git tracking**
 
 Run `ipf_binary.audit_corrected_probe`, full unit tests, `git diff --check`, and `git ls-files` searches for image, spreadsheet, feature, model, and prediction extensions. Abort if any sensitive artifact is tracked.
 
-- [ ] **Step 6: Record aggregate results and commit**
+- [x] **Step 6: Record aggregate results and commit**
 
 Update root `RESULTS.md` only with cohort-level metrics, confidence intervals, limitations, and no identifiers. Commit code/docs/aggregate results after the verification commands pass.
 

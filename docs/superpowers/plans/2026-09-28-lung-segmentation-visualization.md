@@ -308,21 +308,21 @@ Run editable installation with `[segmentation]`, then record package versions an
 
 Use development cases only, spanning label, manufacturer, slice thickness, and lung-volume extremes. Inspect all eight overlay montages. Freeze the segmentation signature before any temporal-test segmentation review.
 
-- [ ] **Step 3: Segment all 651 cases with resume support**
+- [x] **Step 3: Segment all 651 cases with resume support**
 
 Run the batch CLI. Report passed/warning/failed counts. Re-run failures once after confirming they are model or input failures rather than interrupted writes; do not manually alter masks.
 
 After the retry, run `ipf_binary.segmentation_qc_cohort`. Any failed/error input is excluded from both the full-CT and lung-masked arms so their patient membership remains exactly paired; do not substitute a different timepoint or fabricate an intensity correction.
 
-- [ ] **Step 4: Extract lung-masked embeddings and repeat the fixed evaluation protocol**
+- [x] **Step 4: Extract lung-masked embeddings and repeat the fixed evaluation protocol**
 
 Use the same 16 slice indices, MedSigLIP version, nested-development procedure, and locked temporal test. Compare baseline and lung-masked temporal probabilities with a paired bootstrap AUC difference.
 
-- [ ] **Step 5: Generate explicitly requested local attention examples**
+- [x] **Step 5: Generate explicitly requested local attention examples**
 
 Create visualizations only for development cases or for a user-provided case list. Do not select examples by temporal-test correctness. Preserve CT geometry in attention NIfTI files and include the mandatory non-segmentation disclaimer.
 
-- [ ] **Step 6: Verify privacy and record aggregate outcomes**
+- [x] **Step 6: Verify privacy and record aggregate outcomes**
 
 Run all unit tests, verify mask/attention geometry on every successful case, scan Git tracking for medical images and patient-level artifacts, and update root `RESULTS.md` with aggregate segmentation QC and model-comparison metrics only.
 
