@@ -298,19 +298,21 @@ git commit -m "Add local lung attention visualization"
 
 **Interfaces:**
 - Consumes: corrected cohort, trained baseline, and Tasks 1–5.
-- Produces: audited masks for 651 patients, a lung-masked temporal evaluation, and local non-diagnostic visualizations.
+- Produces: audited segmentation outcomes for all 651 source patients, a common QC-eligible cohort for both image arms, a lung-masked temporal evaluation, and local non-diagnostic visualizations.
 
-- [ ] **Step 1: Install the local segmentation optional dependency group**
+- [x] **Step 1: Install the local segmentation optional dependency group**
 
 Run editable installation with `[segmentation]`, then record package versions and the GPU name in the local run manifest.
 
-- [ ] **Step 2: Run an eight-case stratified smoke test**
+- [x] **Step 2: Run an eight-case stratified smoke test**
 
 Use development cases only, spanning label, manufacturer, slice thickness, and lung-volume extremes. Inspect all eight overlay montages. Freeze the segmentation signature before any temporal-test segmentation review.
 
 - [ ] **Step 3: Segment all 651 cases with resume support**
 
 Run the batch CLI. Report passed/warning/failed counts. Re-run failures once after confirming they are model or input failures rather than interrupted writes; do not manually alter masks.
+
+After the retry, run `ipf_binary.segmentation_qc_cohort`. Any failed/error input is excluded from both the full-CT and lung-masked arms so their patient membership remains exactly paired; do not substitute a different timepoint or fabricate an intensity correction.
 
 - [ ] **Step 4: Extract lung-masked embeddings and repeat the fixed evaluation protocol**
 

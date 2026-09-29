@@ -45,7 +45,7 @@
 
 ## 修正标签的正式时间外验证
 
-旧的随机训练/验证/测试划分已用于方案迭代，只保留为探索性结果。修正标签实验仅使用 651 名多次记录标签一致的患者，并将 2024–2026 年 83 人锁定为时间外测试集。
+旧的随机训练/验证/测试划分已用于方案迭代，只保留为探索性结果。标签一致性筛选得到 651 人；正式影像实验还需通过肺分割输入质控，并将全图和肺野限定两条实验臂锁定为同一患者集合。2024–2026 年 83 人时间外测试集不因当前影像质控排除而改变。
 
 ```powershell
 # 生成新队列：651 人，IPF 326，非 IPF 325。
@@ -56,17 +56,7 @@ $CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
 # 检查跨患者 DICOM UID 重复，并对入模 CT 生成 SHA-256 指纹。
 .\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_cohort
 
-# 密封输出目录不会复用缺少 CT 指纹、模型 commit 或文件哈希的旧特征。
-.\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
-  --manifest artifacts/manifests_corrected/corrected_lung_index_ct_manifest.csv `
-  --output-dir artifacts/embeddings/medsiglip_corrected_sealed
-
-# 只在 2011–2023 年开发队列内选模型和阈值；输出目录写入时间外评估锁，禁止静默覆盖。
-.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe `
-  --embedding-index artifacts/embeddings/medsiglip_corrected_sealed/embedding_index.csv `
-  --output-dir artifacts/results/medsiglip_corrected_temporal_sealed
-.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe `
-  --result-dir artifacts/results/medsiglip_corrected_temporal_sealed
+# 后续先完成肺分割输入质控，再按下节命令对共同合格队列提取全图与肺野限定特征。
 ```
 
 正式报告同时给出采集年份、扫描设备、层厚和重建核构成的元数据对照模型，用于判断影像模型是否只学到了采集域差异。自由文本的序列/检查描述不入模，避免诊断关键词或患者信息造成目标泄漏。
@@ -82,18 +72,39 @@ $CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
 # 先从开发队列选定少量病例，生成 QC 预览并人工复核。
 .\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --limit 8 --write-previews
 
-# 冒烟通过后对 651 人运行可恢复批处理。
+# 冒烟通过后对 651 名标签合格患者运行可恢复批处理。
 .\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --write-previews
 
-# 在肺区域内重新提取特征，用固定时间外方案与原基线比较。
+# 将 failed/error 病例从两条实验臂共同排除；当前复核结果应为 650 人。
+.\.venv\Scripts\python.exe -m ipf_binary.segmentation_qc_cohort
+
+# 用完全相同的 650 人先提取全图基线；旧特征缺少指纹或版本时不会复用。
 .\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
-  --manifest artifacts/manifests_corrected/corrected_lung_index_ct_manifest.csv `
+  --manifest artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
+  --output-dir artifacts/embeddings/medsiglip_corrected_sealed
+
+# 只在开发队列内选择模型和阈值，预期人数文件也纳入密封清单。
+.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe `
+  --cohort artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
+  --fingerprints artifacts/manifests_corrected/segmentation_qc_eligible/fingerprints.csv `
+  --expected-counts-json artifacts/manifests_corrected/segmentation_qc_eligible/expected_counts.json `
+  --embedding-index artifacts/embeddings/medsiglip_corrected_sealed/embedding_index.csv `
+  --output-dir artifacts/results/medsiglip_corrected_temporal_sealed
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe `
+  --result-dir artifacts/results/medsiglip_corrected_temporal_sealed
+
+# 在同一 650 人肺区域内重新提取特征，用固定时间外方案与全图基线比较。
+.\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
+  --manifest artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
   --mask-index artifacts/segmentation/lungmask_corrected/segmentation_index.csv `
   --input-mode lung-masked `
   --output-dir artifacts/embeddings/medsiglip_corrected_lung_masked_sealed
 
 # 用同一训练方案拟合肺掩膜输入，并逐患者配对比较时间外预测。
 .\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe `
+  --cohort artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
+  --fingerprints artifacts/manifests_corrected/segmentation_qc_eligible/fingerprints.csv `
+  --expected-counts-json artifacts/manifests_corrected/segmentation_qc_eligible/expected_counts.json `
   --embedding-index artifacts/embeddings/medsiglip_corrected_lung_masked_sealed/embedding_index.csv `
   --output-dir artifacts/results/medsiglip_corrected_lung_masked_temporal_sealed
 .\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe `

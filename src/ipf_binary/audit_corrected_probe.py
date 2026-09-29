@@ -18,11 +18,39 @@ from .evaluation import (
 )
 from .leakage import sha256_file
 from .train_corrected_probe import (
+    EXPECTED_COUNTS,
     load_embeddings,
     membership_sha256,
     prepare_metadata,
     validate_evaluation_groups,
 )
+
+
+def validate_manifest_counts(
+    manifest: dict[str, Any],
+    predictions: pd.DataFrame,
+) -> dict[str, int]:
+    labels = pd.to_numeric(predictions["label"], errors="raise").astype(int)
+    temporal = predictions["evaluation_group"].astype(str).eq("temporal_test")
+    development = predictions["evaluation_group"].astype(str).eq("development")
+    actual = {
+        "patients": int(len(predictions)),
+        "label_0": int(labels.eq(0).sum()),
+        "label_1": int(labels.eq(1).sum()),
+        "development": int(development.sum()),
+        "temporal_test": int(temporal.sum()),
+        "temporal_label_0": int((temporal & labels.eq(0)).sum()),
+        "temporal_label_1": int((temporal & labels.eq(1)).sum()),
+    }
+    expected = manifest.get("expected_counts")
+    if not isinstance(expected, dict) or set(expected) != set(EXPECTED_COUNTS):
+        raise AssertionError("sealed expected counts are missing or malformed")
+    if {key: int(expected[key]) for key in EXPECTED_COUNTS} != actual:
+        raise AssertionError("sealed expected counts differ from predictions")
+    recorded_data = manifest.get("data", {})
+    if any(int(recorded_data.get(key, -1)) != value for key, value in actual.items()):
+        raise AssertionError("sealed data counts differ from predictions")
+    return actual
 
 
 def validate_run_seal(
@@ -46,6 +74,8 @@ def validate_run_seal(
         expected = str(manifest.get("artifacts", {}).get(f"{name}_sha256", ""))
         if sha256_file(path) != expected:
             raise AssertionError(f"sealed {name} artifact hash does not match")
+
+    validate_manifest_counts(manifest, predictions)
 
     development = predictions.loc[predictions["evaluation_group"].eq("development")]
     temporal = predictions.loc[predictions["evaluation_group"].eq("temporal_test")]

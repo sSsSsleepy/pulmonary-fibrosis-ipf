@@ -13,6 +13,7 @@ from ipf_binary.train_corrected_probe import (
     ensure_temporal_output_is_unlocked,
     membership_sha256,
     metadata_feature_columns,
+    resolve_expected_counts,
     validate_embedding_provenance,
     validate_evaluation_groups,
 )
@@ -155,6 +156,30 @@ class CorrectedTrainingTests(unittest.TestCase):
         )
 
         self.assertEqual(membership_sha256(frame), membership_sha256(frame.iloc[::-1]))
+
+    def test_expected_counts_can_be_loaded_from_a_sealed_qc_manifest(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "expected.json"
+            expected = {
+                "patients": 650,
+                "label_0": 325,
+                "label_1": 325,
+                "development": 567,
+                "temporal_test": 83,
+                "temporal_label_0": 38,
+                "temporal_label_1": 45,
+            }
+            path.write_text(__import__("json").dumps(expected), encoding="utf-8")
+
+            self.assertEqual(resolve_expected_counts(path), expected)
+
+    def test_expected_counts_reject_missing_keys(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "expected.json"
+            path.write_text('{"patients": 650}', encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "keys"):
+                resolve_expected_counts(path)
 
 
 if __name__ == "__main__":

@@ -7,12 +7,36 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from ipf_binary.audit_corrected_probe import validate_run_seal
+from ipf_binary.audit_corrected_probe import validate_manifest_counts, validate_run_seal
 from ipf_binary.leakage import sha256_file
 from ipf_binary.train_corrected_probe import membership_sha256
 
 
 class AuditCorrectedProbeTests(unittest.TestCase):
+    def test_manifest_expected_counts_must_match_predictions(self) -> None:
+        predictions = pd.DataFrame(
+            {
+                "patient_id": ["P1", "P2"],
+                "ct_id": ["C1", "C2"],
+                "label": [0, 1],
+                "evaluation_group": ["development", "temporal_test"],
+            }
+        )
+        actual = {
+            "patients": 2,
+            "label_0": 1,
+            "label_1": 1,
+            "development": 1,
+            "temporal_test": 1,
+            "temporal_label_0": 0,
+            "temporal_label_1": 1,
+        }
+        validate_manifest_counts({"data": actual, "expected_counts": actual}, predictions)
+
+        wrong = {**actual, "patients": 3}
+        with self.assertRaisesRegex(AssertionError, "expected counts"):
+            validate_manifest_counts({"data": actual, "expected_counts": wrong}, predictions)
+
     def test_run_seal_rejects_modified_classifier(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

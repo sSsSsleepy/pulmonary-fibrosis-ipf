@@ -51,6 +51,23 @@ EXPECTED_COUNTS = {
 }
 
 
+def resolve_expected_counts(path: Path | None) -> dict[str, int]:
+    if path is None:
+        return EXPECTED_COUNTS.copy()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or set(payload) != set(EXPECTED_COUNTS):
+        raise ValueError("expected-counts JSON keys differ from the training count schema")
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in payload.values()):
+        raise ValueError("expected-counts JSON values must be non-negative integers")
+    if payload["label_0"] + payload["label_1"] != payload["patients"]:
+        raise ValueError("expected label counts do not sum to patients")
+    if payload["development"] + payload["temporal_test"] != payload["patients"]:
+        raise ValueError("expected evaluation-group counts do not sum to patients")
+    if payload["temporal_label_0"] + payload["temporal_label_1"] != payload["temporal_test"]:
+        raise ValueError("expected temporal label counts do not sum to temporal_test")
+    return {key: int(payload[key]) for key in EXPECTED_COUNTS}
+
+
 def membership_sha256(frame: pd.DataFrame) -> str:
     required = ["patient_id", "ct_id", "label"]
     missing = [column for column in required if column not in frame]
@@ -455,6 +472,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=20260928)
     parser.add_argument("--skip-expected-count-check", action="store_true")
+    parser.add_argument("--expected-counts-json", type=Path)
     parser.add_argument("--allow-temporal-overwrite", action="store_true")
     parser.add_argument("--temporal-overwrite-reason", default="")
     return parser.parse_args()
@@ -463,6 +481,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args()
+    if args.skip_expected_count_check and args.expected_counts_json is not None:
+        raise ValueError("--skip-expected-count-check and --expected-counts-json are mutually exclusive")
+    expected_counts = resolve_expected_counts(args.expected_counts_json)
     ensure_temporal_output_is_unlocked(
         args.output_dir,
         allow_overwrite=args.allow_temporal_overwrite,
@@ -520,7 +541,7 @@ def main() -> None:
         "temporal_label_0": int((labels[temporal_mask] == 0).sum()),
         "temporal_label_1": int((labels[temporal_mask] == 1).sum()),
     }
-    if not args.skip_expected_count_check and count_summary != EXPECTED_COUNTS:
+    if not args.skip_expected_count_check and count_summary != expected_counts:
         raise AssertionError(
             f"corrected training counts differ from locked design: {count_summary}"
         )
@@ -665,7 +686,13 @@ def main() -> None:
             "cohort_sha256": sha256_file(args.cohort),
             "fingerprints_sha256": sha256_file(fingerprint_path),
             "embedding_index_sha256": sha256_file(args.embedding_index),
+            "expected_counts_sha256": (
+                sha256_file(args.expected_counts_json)
+                if args.expected_counts_json is not None
+                else "built-in-corrected-cohort-counts"
+            ),
         },
+        "expected_counts": expected_counts,
         "artifacts": {
             "image_model_sha256": sha256_file(args.output_dir / "linear_probe.joblib"),
             "metadata_model_sha256": sha256_file(args.output_dir / "metadata_probe.joblib"),
