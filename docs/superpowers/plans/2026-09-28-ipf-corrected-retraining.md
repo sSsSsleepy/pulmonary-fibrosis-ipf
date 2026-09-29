@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and evaluate a leakage-resistant IPF classifier on the 651-patient corrected-label cohort, with a locked 2024–2026 temporal test set and repeated nested cross-validation on the 2011–2023 development cohort.
+**Goal:** Build and evaluate a leakage-resistant IPF classifier from the 651-patient corrected-label source cohort, using one common segmentation-QC-eligible imaging cohort for both experiment arms, a locked 2024–2026 temporal test set, and repeated nested cross-validation on the 2011–2023 development cohort.
 
 **Architecture:** A pure cohort module maps CT-level corrected diagnoses to patient-level consistent labels and produces an ignored patient manifest plus a non-identifying audit. A separate evaluation module owns nested model selection, threshold selection, temporal testing, uncertainty estimates, and the acquisition-metadata comparator. The MedSigLIP extractor records input fingerprints so extracted features can be traced to exact local CT volumes.
 
@@ -12,9 +12,9 @@
 
 ## Global Constraints
 
-- Use exactly 651 patients with consistent corrected labels: IPF 326 and non-IPF 325.
+- Start from exactly 651 patients with consistent corrected labels: IPF 326 and non-IPF 325. After reviewed imaging QC, use the same eligible set in every image-input arm; the current formal set is 650 patients after one non-diagnostic development CT is excluded.
 - Exclude 21 label-conflict patients and 66 patients without corrected labels.
-- Use one index CT per patient and never permit patient, CT, Study, Series, or SOP overlap across development and temporal test groups.
+- Use one index CT per patient and never permit patient, CT, Study, or Series overlap across development and temporal test groups. Audit every SOP UID available in source metadata; if only one representative SOP UID is available per converted series, report that coverage limit instead of claiming a complete instance-level audit.
 - Lock all scans from 2024–2026 as the 83-patient temporal test set; it may not influence preprocessing, model, hyperparameter, or threshold selection.
 - Keep CT, spreadsheets, patient manifests, embeddings, fitted models, and individual predictions outside Git through existing ignore rules.
 - Never pass report text or discharge diagnoses into the image classifier.
@@ -297,7 +297,7 @@ def test_validate_evaluation_groups_rejects_duplicate_patient(self) -> None:
 def test_metadata_feature_columns_exclude_diagnosis_text(self) -> None:
     self.assertEqual(metadata_feature_columns(),
                      ["scan_year", "slice_thickness_mm", "manufacturer",
-                      "scanner_model", "kernel", "series_description", "study_description"])
+                      "scanner_model", "kernel"])
 ```
 
 - [ ] **Step 2: Run the tests and verify RED**
@@ -345,27 +345,27 @@ git commit -m "Add corrected temporal IPF training workflow"
 - Consumes: the three user-provided local spreadsheets/CT data and Tasks 1–5.
 - Produces: audited local experiment artifacts and a Git-safe aggregate summary.
 
-- [ ] **Step 1: Build and assert the cohort**
+- [x] **Step 1: Build and assert the cohort**
 
 Run `ipf_binary.build_corrected_cohort` with the corrected workbook path, old mapping workbook, and lung-index manifest. Abort unless counts are exactly 651 total, 325 non-IPF, 326 IPF, 568 development, and 83 temporal test.
 
-- [ ] **Step 2: Run identifier and file-fingerprint audit**
+- [x] **Step 2: Run identifier and file-fingerprint audit**
 
 Run `ipf_binary.audit_corrected_cohort`. Abort on any cross-patient identifier duplicate, missing source file, empty hash, or development/test overlap.
 
-- [ ] **Step 3: Extract all 651 provenance-aware MedSigLIP embeddings**
+- [x] **Step 3: Extract provenance-aware MedSigLIP embeddings for the common segmentation-QC-eligible cohort**
 
-Run `ipf_binary.extract_medsiglip_embeddings` with 16 lung-window slices and the corrected manifest. Existing embeddings may be reused only when the stored SHA-256, model ID, and preprocessing signature match exactly.
+Run `ipf_binary.segmentation_qc_cohort`, then run `ipf_binary.extract_medsiglip_embeddings` with 16 lung-window slices and its common eligible manifest. Existing embeddings may be reused only when the stored SHA-256, model ID, and preprocessing signature match exactly.
 
-- [ ] **Step 4: Train using development rows and evaluate the locked temporal test once**
+- [x] **Step 4: Train using development rows and evaluate the locked temporal test once**
 
 Run `ipf_binary.train_corrected_probe` and retain stdout. Confirm the metrics file reports nested-CV fold distributions and exactly one temporal-test evaluation.
 
-- [ ] **Step 5: Audit saved results and scan Git tracking**
+- [x] **Step 5: Audit saved results and scan Git tracking**
 
 Run `ipf_binary.audit_corrected_probe`, full unit tests, `git diff --check`, and `git ls-files` searches for image, spreadsheet, feature, model, and prediction extensions. Abort if any sensitive artifact is tracked.
 
-- [ ] **Step 6: Record aggregate results and commit**
+- [x] **Step 6: Record aggregate results and commit**
 
 Update root `RESULTS.md` only with cohort-level metrics, confidence intervals, limitations, and no identifiers. Commit code/docs/aggregate results after the verification commands pass.
 

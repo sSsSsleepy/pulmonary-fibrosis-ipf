@@ -43,6 +43,80 @@
 .\.venv\Scripts\python.exe -m ipf_binary.audit_probe --result-dir artifacts/results/medsiglip_lung_linear_probe_formal
 ```
 
+## 修正标签的正式时间外验证
+
+旧的随机训练/验证/测试划分已用于方案迭代，只保留为探索性结果。标签一致性筛选得到 651 人；正式影像实验还需通过肺分割输入质控，并将全图和肺野限定两条实验臂锁定为同一患者集合。2024–2026 年 83 人时间外测试集不因当前影像质控排除而改变。
+
+```powershell
+# 生成新队列：651 人，IPF 326，非 IPF 325。
+$CorrectedLabels = 'D:\private_medical_data\标准化出院诊断.xlsx'
+.\.venv\Scripts\python.exe -m ipf_binary.build_corrected_cohort `
+  --corrected-labels $CorrectedLabels
+
+# 检查跨患者 DICOM UID 重复，并对入模 CT 生成 SHA-256 指纹。
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_cohort
+
+# 后续先完成肺分割输入质控，再按下节命令对共同合格队列提取全图与肺野限定特征。
+```
+
+正式报告同时给出采集年份、扫描设备、层厚和重建核构成的元数据对照模型，用于判断影像模型是否只学到了采集域差异。自由文本的序列/检查描述不入模，避免诊断关键词或患者信息造成目标泄漏。
+
+## 肺野/肺叶分割和可视化
+
+正式批处理默认使用 `lungmask` 的 `R231` 病理肺模型生成左右肺野标签；它在严重间质性改变病例上更稳健，且能够在当前队列规模上完成。若研究问题明确需要肺叶标签，可显式传入 `--modelname LTRCLobes_R231 --fillmodel R231`，但该组合的逐连通域融合后处理明显更慢，应先另做小样本计时和质控。
+
+```powershell
+# 安装本地分割依赖。
+.\.venv\Scripts\python.exe -m pip install -e '.[segmentation]'
+
+# 先从开发队列选定少量病例，生成 QC 预览并人工复核。
+.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --limit 8 --write-previews
+
+# 冒烟通过后对 651 名标签合格患者运行可恢复批处理。
+.\.venv\Scripts\python.exe -m ipf_binary.segment_lungs --write-previews
+
+# 将 failed/error 病例从两条实验臂共同排除；当前复核结果应为 650 人。
+.\.venv\Scripts\python.exe -m ipf_binary.segmentation_qc_cohort
+
+# 用完全相同的 650 人先提取全图基线；旧特征缺少指纹或版本时不会复用。
+.\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
+  --manifest artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
+  --output-dir artifacts/embeddings/medsiglip_corrected_sealed
+
+# 只在开发队列内选择模型和阈值，预期人数文件也纳入密封清单。
+.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe `
+  --cohort artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
+  --fingerprints artifacts/manifests_corrected/segmentation_qc_eligible/fingerprints.csv `
+  --expected-counts-json artifacts/manifests_corrected/segmentation_qc_eligible/expected_counts.json `
+  --embedding-index artifacts/embeddings/medsiglip_corrected_sealed/embedding_index.csv `
+  --output-dir artifacts/results/medsiglip_corrected_temporal_sealed
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe `
+  --result-dir artifacts/results/medsiglip_corrected_temporal_sealed
+
+# 在同一 650 人肺区域内重新提取特征，用固定时间外方案与全图基线比较。
+.\.venv\Scripts\python.exe -m ipf_binary.extract_medsiglip_embeddings `
+  --manifest artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
+  --mask-index artifacts/segmentation/lungmask_corrected/segmentation_index.csv `
+  --input-mode lung-masked `
+  --output-dir artifacts/embeddings/medsiglip_corrected_lung_masked_sealed
+
+# 用同一训练方案拟合肺掩膜输入，并逐患者配对比较时间外预测。
+.\.venv\Scripts\python.exe -m ipf_binary.train_corrected_probe `
+  --cohort artifacts/manifests_corrected/segmentation_qc_eligible/cohort.csv `
+  --fingerprints artifacts/manifests_corrected/segmentation_qc_eligible/fingerprints.csv `
+  --expected-counts-json artifacts/manifests_corrected/segmentation_qc_eligible/expected_counts.json `
+  --embedding-index artifacts/embeddings/medsiglip_corrected_lung_masked_sealed/embedding_index.csv `
+  --output-dir artifacts/results/medsiglip_corrected_lung_masked_temporal_sealed
+.\.venv\Scripts\python.exe -m ipf_binary.audit_corrected_probe `
+  --result-dir artifacts/results/medsiglip_corrected_lung_masked_temporal_sealed
+.\.venv\Scripts\python.exe -m ipf_binary.compare_corrected_probes
+
+# 只解释显式指定的开发队列 CT；不会自动挑选“漂亮”病例。
+.\.venv\Scripts\python.exe -m ipf_binary.explain_corrected_probe --ct-id CT_EXAMPLE
+```
+
+`segment_lungs` 生成的是肺部解剖掩膜。`explain_corrected_probe` 只接受与密封训练清单、分类器哈希、MedSigLIP commit、输入模式和切片参数完全一致的特征，生成的是局部遮挡后分类概率变化热图，并固定标注为 **model attention, not fibrosis segmentation**；在没有医生像素级标注和独立分割评估前，不得把该热图称为纤维化病灶分割。
+
 如果 MedSigLIP 尚未完成 Hugging Face 授权，可先用公开的 MIT 许可 BiomedCLIP 做端到端技术冒烟：
 
 ```powershell

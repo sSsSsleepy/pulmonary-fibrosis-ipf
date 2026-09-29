@@ -109,7 +109,7 @@ Expected: import failure for `ipf_binary.segment_lungs`.
 
 - [ ] **Step 3: Implement the lungmask adapter and resumable CLI**
 
-Instantiate `LMInferer(modelname="LTRCLobes_R231", fillmodel="R231")` once per process. Read with SimpleITK, call the inferer, write a UInt8 mask after `CopyInformation`, calculate Task 1 QC, and atomically replace completed `.nii.gz` and `.json` files. Reuse output only when source SHA-256 and segmentation signature match; otherwise re-run that case.
+Instantiate `LMInferer(modelname="R231", fillmodel=None)` once per process for the scalable whole-lung baseline. `LTRCLobes_R231` remains an explicit optional preset and must resolve to the Python API pair `modelname="LTRCLobes", fillmodel="R231"`; on this cohort its fusion postprocessing is too slow for the primary 651-case run. Read with SimpleITK, call the inferer, write a UInt8 mask after `CopyInformation`, calculate Task 1 QC per anatomical label, and atomically replace completed `.nii.gz` and `.json` files. Reuse output only when source SHA-256 and segmentation signature match; otherwise re-run that case.
 
 - [ ] **Step 4: Run focused and full tests**
 
@@ -298,29 +298,31 @@ git commit -m "Add local lung attention visualization"
 
 **Interfaces:**
 - Consumes: corrected cohort, trained baseline, and Tasks 1–5.
-- Produces: audited masks for 651 patients, a lung-masked temporal evaluation, and local non-diagnostic visualizations.
+- Produces: audited segmentation outcomes for all 651 source patients, a common QC-eligible cohort for both image arms, a lung-masked temporal evaluation, and local non-diagnostic visualizations.
 
-- [ ] **Step 1: Install the local segmentation optional dependency group**
+- [x] **Step 1: Install the local segmentation optional dependency group**
 
 Run editable installation with `[segmentation]`, then record package versions and the GPU name in the local run manifest.
 
-- [ ] **Step 2: Run an eight-case stratified smoke test**
+- [x] **Step 2: Run an eight-case stratified smoke test**
 
 Use development cases only, spanning label, manufacturer, slice thickness, and lung-volume extremes. Inspect all eight overlay montages. Freeze the segmentation signature before any temporal-test segmentation review.
 
-- [ ] **Step 3: Segment all 651 cases with resume support**
+- [x] **Step 3: Segment all 651 cases with resume support**
 
 Run the batch CLI. Report passed/warning/failed counts. Re-run failures once after confirming they are model or input failures rather than interrupted writes; do not manually alter masks.
 
-- [ ] **Step 4: Extract lung-masked embeddings and repeat the fixed evaluation protocol**
+After the retry, run `ipf_binary.segmentation_qc_cohort`. Any failed/error input is excluded from both the full-CT and lung-masked arms so their patient membership remains exactly paired; do not substitute a different timepoint or fabricate an intensity correction.
+
+- [x] **Step 4: Extract lung-masked embeddings and repeat the fixed evaluation protocol**
 
 Use the same 16 slice indices, MedSigLIP version, nested-development procedure, and locked temporal test. Compare baseline and lung-masked temporal probabilities with a paired bootstrap AUC difference.
 
-- [ ] **Step 5: Generate explicitly requested local attention examples**
+- [x] **Step 5: Generate explicitly requested local attention examples**
 
 Create visualizations only for development cases or for a user-provided case list. Do not select examples by temporal-test correctness. Preserve CT geometry in attention NIfTI files and include the mandatory non-segmentation disclaimer.
 
-- [ ] **Step 6: Verify privacy and record aggregate outcomes**
+- [x] **Step 6: Verify privacy and record aggregate outcomes**
 
 Run all unit tests, verify mask/attention geometry on every successful case, scan Git tracking for medical images and patient-level artifacts, and update root `RESULTS.md` with aggregate segmentation QC and model-comparison metrics only.
 

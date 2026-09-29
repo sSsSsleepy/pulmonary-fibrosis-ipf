@@ -22,5 +22,12 @@ dependencies = [
   "transformers>=4.53,<6",
 ]
 
+[project.optional-dependencies]
+segmentation = [
+  "lungmask>=0.2.20,<0.3",
+  "SimpleITK>=2.5,<3",
+  "scipy>=1.15,<2",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -13,7 +13,15 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModel, AutoProcessor
 
-from .ct_io import load_ct_slices
+from .ct_io import load_ct_slices, load_masked_ct_slices
+from .embedding_records import (
+    make_embedding_record,
+    preprocessing_signature,
+    record_is_reusable,
+    resolve_model_revision,
+    write_embedding_archive_atomic,
+)
+from .leakage import sha256_file
 
 
 def sigmoid(value: float) -> float:
@@ -71,6 +79,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slices", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--window-mode", choices=("lung", "tri"), default="lung")
+    parser.add_argument("--input-mode", choices=("full", "lung-masked"), default="full")
+    parser.add_argument("--mask-index", type=Path)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -83,6 +93,20 @@ def main() -> None:
     if args.cohort == "index":
         manifest = manifest.loc[manifest["is_index_ct"] == 1].copy()
     manifest = manifest.loc[manifest["series_path"].fillna("").ne("")].copy()
+    if args.input_mode == "lung-masked":
+        if args.mask_index is None:
+            raise ValueError("--mask-index is required for lung-masked input")
+        mask_index = pd.read_csv(
+            args.mask_index,
+            dtype={"patient_id": "string", "ct_id": "string"},
+        )
+        mask_index = mask_index.loc[mask_index["status"].isin(["passed", "warning"])].copy()
+        manifest = manifest.merge(
+            mask_index[["patient_id", "ct_id", "mask_path"]],
+            on=["patient_id", "ct_id"],
+            how="inner",
+            validate="one_to_one",
+        )
     if args.limit is not None:
         manifest = manifest.head(args.limit).copy()
 
@@ -100,21 +124,63 @@ def main() -> None:
         cache_dir=str(args.cache_dir),
     ).to(device)
     model.eval()
-    processor = AutoProcessor.from_pretrained(args.model_id, cache_dir=str(args.cache_dir))
+    model_revision = resolve_model_revision(model)
+    processor = AutoProcessor.from_pretrained(
+        args.model_id,
+        revision=model_revision,
+        cache_dir=str(args.cache_dir),
+    )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     index_path = args.output_dir / "embedding_index.csv"
     existing = pd.read_csv(index_path, dtype={"patient_id": "string", "ct_id": "string"}) if index_path.exists() else pd.DataFrame()
-    existing_by_ct = set(existing["ct_id"].astype(str)) if not existing.empty else set()
+    existing_by_ct = (
+        {str(record["ct_id"]): record for record in existing.to_dict("records")}
+        if not existing.empty
+        else {}
+    )
     output_records = existing.to_dict("records") if not existing.empty else []
 
     for row in tqdm(manifest.itertuples(index=False), total=len(manifest), desc="MedSigLIP CT scans"):
         ct_id = str(row.ct_id)
         output_path = args.output_dir / f"{ct_id}.npz"
-        if not args.overwrite and ct_id in existing_by_ct and output_path.exists():
+        series_sha256 = sha256_file(Path(row.series_path))
+        mask_sha256 = ""
+        if args.input_mode == "lung-masked":
+            mask_sha256 = sha256_file(Path(row.mask_path))
+        signature = preprocessing_signature(
+            args.slices,
+            args.window_mode,
+            input_mode=args.input_mode,
+            mask_sha256=mask_sha256,
+        )
+        if (
+            not args.overwrite
+            and ct_id in existing_by_ct
+            and record_is_reusable(
+                existing_by_ct[ct_id],
+                output_path,
+                series_sha256,
+                args.model_id,
+                model_revision,
+                signature,
+            )
+        ):
             continue
         try:
-            images, slice_indices = load_ct_slices(Path(row.series_path), args.slices, args.window_mode)
+            if args.input_mode == "lung-masked":
+                images, slice_indices = load_masked_ct_slices(
+                    Path(row.series_path),
+                    Path(row.mask_path),
+                    args.slices,
+                    args.window_mode,
+                )
+            else:
+                images, slice_indices = load_ct_slices(
+                    Path(row.series_path),
+                    args.slices,
+                    args.window_mode,
+                )
             slice_embeddings, slice_scores = extract_one(
                 model,
                 processor,
@@ -127,42 +193,54 @@ def main() -> None:
             pooled = np.concatenate(
                 [slice_embeddings.mean(axis=0), slice_embeddings.max(axis=0)], axis=0
             ).astype(np.float32)
-            np.savez_compressed(
+            embedding_sha256 = write_embedding_archive_atomic(
                 output_path,
                 pooled_embedding=pooled,
-                slice_embeddings=slice_embeddings.astype(np.float16),
+                slice_embeddings=slice_embeddings.astype(np.float32),
                 slice_indices=slice_indices.astype(np.int16),
                 zero_shot_slice_scores=slice_scores,
             )
+            output_records = [record for record in output_records if str(record.get("ct_id")) != ct_id]
+            output_records.append(
+                make_embedding_record(
+                    row,
+                    output_path,
+                    pooled,
+                    slice_indices,
+                    slice_scores,
+                    args.model_id,
+                    model_revision,
+                    args.window_mode,
+                    args.slices,
+                    series_sha256,
+                    embedding_sha256,
+                    input_mode=args.input_mode,
+                    mask_sha256=mask_sha256,
+                )
+            )
+        except Exception as exc:
             output_records = [record for record in output_records if str(record.get("ct_id")) != ct_id]
             output_records.append(
                 {
                     "patient_id": str(row.patient_id),
                     "ct_id": ct_id,
                     "label": int(row.label),
-                    "split": row.split,
-                    "scan_date": row.scan_date,
-                    "embedding_path": str(output_path.resolve()),
-                    "zero_shot_score": float(slice_scores.mean()),
-                    "slice_count": int(len(slice_indices)),
-                    "window_mode": args.window_mode,
-                    "model_id": args.model_id,
-                    "status": "ok",
-                }
-            )
-        except Exception as exc:
-            output_records.append(
-                {
-                    "patient_id": str(row.patient_id),
-                    "ct_id": ct_id,
-                    "label": int(row.label),
-                    "split": row.split,
+                    "evaluation_group": str(
+                        getattr(row, "evaluation_group", getattr(row, "split", ""))
+                    ),
                     "scan_date": row.scan_date,
                     "embedding_path": "",
                     "zero_shot_score": np.nan,
                     "slice_count": 0,
                     "window_mode": args.window_mode,
+                    "input_mode": args.input_mode,
                     "model_id": args.model_id,
+                    "model_revision": model_revision,
+                    "series_sha256": series_sha256,
+                    "embedding_sha256": "",
+                    "mask_sha256": mask_sha256,
+                    "preprocessing_signature": signature,
+                    "feature_dimension": 0,
                     "status": f"error:{type(exc).__name__}:{exc}",
                 }
             )
@@ -173,6 +251,7 @@ def main() -> None:
             {
                 "device": str(device),
                 "model_id": args.model_id,
+                "model_revision": model_revision,
                 "requested_scans": int(len(manifest)),
                 "successful_scans": int(sum(record.get("status") == "ok" for record in output_records)),
                 "index_path": str(index_path.resolve()),
